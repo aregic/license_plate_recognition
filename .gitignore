@@ -1,0 +1,6 @@
+# python stuff
+__pychache__/
+*pyc
+
+# don't store samples directly - maybe store it at a different location separately?
+samples/*
