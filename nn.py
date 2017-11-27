@@ -19,7 +19,7 @@ BATCH_SIZE = 128
 SIZE_X = 512
 SIZE_Y = 512
 
-RANDOM_SEED = 354
+RANDOM_SEED = 854654
 
 tf.set_random_seed = RANDOM_SEED
 
@@ -58,19 +58,22 @@ def tf_pad_image_x(image : np.ndarray, label : np.ndarray, size_x : int, size_y 
     y = shape[1]
     z = shape[2]
 
+    pad_needed = size_x-x
+    x_asd = tf.random_uniform(minval=0, maxval=pad_needed, shape=[1], seed=RANDOM_SEED, dtype=tf.int32)
+    x_pad_before = tf.Session().run(x_asd)
+    asd = x_pad_before[0]
+
     def pad_x():
-        pad_needed = size_x-x
-        x_pad_before = tf.get_variable("x_pad_before", initializer=tf.random_uniform_initializer(minval=0, maxval=pad_needed, seed=RANDOM_SEED), shape=[1], dtype=tf.int32)
-        asd = x_pad_before.initialized_value()[0]
+
         padding_tensor = [[asd, size_x-x-asd], [0,0], [0,0]]
         tf.Print(padding_tensor, [padding_tensor], "padding_tensor: ")
         x_padded_image = tf.pad(image, padding_tensor)
 
         shifted_label = label
-        shifted_label[0] += asd
-        shifted_label[2] += asd
-        shifted_label[4] += asd
-        shifted_label[6] += asd
+        shifted_label[1] += asd
+        shifted_label[3] += asd
+        shifted_label[5] += asd
+        shifted_label[7] += asd
 
         return (x_padded_image, shifted_label)
 
@@ -83,20 +86,22 @@ def tf_pad_image_y(image : np.ndarray, label : np.ndarray, size_x : int, size_y 
     y = shape[1]
     z = shape[2]
 
+    pad_needed = size_y-y
+    y_asd = tf.random_uniform(minval=0, maxval=pad_needed, shape=[1], seed=RANDOM_SEED, dtype=tf.int32)
+    y_pad_before = tf.Session().run(y_asd)
+    asd = y_pad_before[0]
+
     def pad_y():
-        pad_needed = size_y-y
-        y_pad_before = tf.get_variable("y_pad_before", initializer=tf.random_uniform_initializer(minval=0, maxval=pad_needed, seed=RANDOM_SEED), shape=[1], dtype=tf.int32)
-        asd = y_pad_before.initialized_value()[0]
         padding_tensor = [[0,0], [asd, size_y-y-asd], [0,0]]
         tf.Print(padding_tensor, [padding_tensor], "padding_tensor: ")
         #print("padding: %s" % y_pad_before.eval())
         y_padded_image = tf.pad(image, padding_tensor)
 
         shifted_label = label
-        shifted_label[1] += asd
-        shifted_label[3] += asd
-        shifted_label[5] += asd
-        shifted_label[7] += asd
+        shifted_label[0] += asd
+        shifted_label[2] += asd
+        shifted_label[4] += asd
+        shifted_label[6] += asd
 
         return (y_padded_image, shifted_label)
 
