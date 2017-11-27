@@ -13,15 +13,16 @@ def doit():
     picloc = "./samples/" + smallest["file name"].values[0]
     pic = scipy.ndimage.imread(picloc)
     label = get_bounding_box(picloc) 
+    tf.reset_default_graph()
     sess = tf.Session()
     #sess = tf_debug.LocalCLIDebugWrapperSession(sess)
 
-    with sess.as_default():                                                        
-       respic, reslabel = tf_pad_image(pic, list(label.astype("int32").flat), 512,512)
-       respic = respic.eval()
-       reslabel = reslabel
-       reslabel = np.asarray( [r.eval() for r in reslabel] )
-       reslabel = reslabel.reshape((4,2))
+    with sess.as_default():
+        respic, reslabel = tf_pad_image(pic, list(label.astype("int32").flat), 512,512)
+        respic = respic.eval(session=sess)
+        reslabel = reslabel
+        reslabel = np.asarray( [r.eval() for r in reslabel] )
+        reslabel = reslabel.reshape((4,2))
 
     return respic, reslabel, label
 
