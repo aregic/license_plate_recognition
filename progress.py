@@ -18,8 +18,9 @@ def doit():
     #sess = tf_debug.LocalCLIDebugWrapperSession(sess)
 
     with sess.as_default():
+        sess.run(tf.global_variables_initializer())
         respic, reslabel = tf_pad_image(pic, list(label.astype("int32").flat), 512,512)
-        respic = respic.eval(session=sess)
+        respic = respic.eval()
         reslabel = reslabel
         reslabel = np.asarray( [r.eval() for r in reslabel] )
         reslabel = reslabel.reshape((4,2))
