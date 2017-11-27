@@ -19,7 +19,7 @@ BATCH_SIZE = 128
 SIZE_X = 512
 SIZE_Y = 512
 
-RANDOM_SEED = 3453
+RANDOM_SEED = 3564
 
 tf.set_random_seed = RANDOM_SEED
 
@@ -52,7 +52,7 @@ def pad_image(image : np.ndarray, size_x : int, size_y : int) -> np.ndarray :
     return normed_image2
 
 
-def tf_pad_image_x(image : np.ndarray, size_x : int, size_y : int) -> np.ndarray :
+def tf_pad_image_x(image : np.ndarray, label : np.ndarray, size_x : int, size_y : int) -> (np.ndarray, np.ndarray) :
     shape = tf.shape(image)
     x = shape[0]
     y = shape[1]
@@ -60,18 +60,24 @@ def tf_pad_image_x(image : np.ndarray, size_x : int, size_y : int) -> np.ndarray
 
     def pad_x():
         pad_needed = size_x-x
-        x_pad_before = tf.random_uniform([1], minval=0, maxval=pad_needed, 
-                dtype = tf.int32, seed=RANDOM_SEED, name="x_pad_before")
-        padding_tensor = [[x_pad_before[0], size_x-x_pad_before[0]], [0,0], [0,0]]
-        print("padding_tensor: %s" % padding_tensor)
+        padding = tf.Variable(tf.random_uniform([1], minval=0, maxval=pad_needed, 
+                dtype = tf.int32, seed=RANDOM_SEED, name="x_pad_before"))
+        padding_tensor = [[x_pad_before[0], size_x-x-x_pad_before[0]], [0,0], [0,0]]
+        tf.Print(padding_tensor, [padding_tensor], "padding_tensor: ")
         x_padded_image = tf.pad(image, padding_tensor)
 
-        return x_padded_image
+        shifted_label = label
+        shifted_label[0] += x_pad_before[0]
+        shifted_label[2] += x_pad_before[0]
+        shifted_label[4] += x_pad_before[0]
+        shifted_label[6] += x_pad_before[0]
 
-    return tf.cond(x < size_x, pad_x, lambda : image)
+        return (x_padded_image, shifted_label)
+
+    return tf.cond(x < size_x, pad_x, lambda : (image, label))
 
 
-def tf_pad_image_y(image : np.ndarray, size_x : int, size_y : int) -> np.ndarray :
+def tf_pad_image_y(image : np.ndarray, label : np.ndarray, size_x : int, size_y : int) -> (np.ndarray, np.ndarray) :
     shape = tf.shape(image)
     x = shape[0]
     y = shape[1]
@@ -79,23 +85,35 @@ def tf_pad_image_y(image : np.ndarray, size_x : int, size_y : int) -> np.ndarray
 
     def pad_y():
         pad_needed = size_y-y
-        y_pad_before = tf.random_uniform([1], minval=0, maxval=pad_needed, 
-                dtype = tf.int32, seed=RANDOM_SEED, name="y_pad_before")
-        padding_tensor = [[0,0], [y_pad_before[0], size_y-y_pad_before[0]], [0,0]]
-        print("padding_tensor: %s" % padding_tensor)
+        y_pad_before = tf.Variable(tf.random_uniform([1], minval=0, maxval=pad_needed, 
+                dtype = tf.int32, seed=RANDOM_SEED, name="y_pad_before"))
+        padding_tensor = [[0,0], [y_pad_before[0], size_y-y-y_pad_before[0]], [0,0]]
+        tf.Print(padding_tensor, [padding_tensor], "padding_tensor: ")
+        #print("padding: %s" % y_pad_before.eval())
         y_padded_image = tf.pad(image, padding_tensor)
 
-        return y_padded_image
+        shifted_label = label
+        shifted_label[1] += y_pad_before[0]
+        shifted_label[3] += y_pad_before[0]
+        shifted_label[5] += y_pad_before[0]
+        shifted_label[7] += y_pad_before[0]
 
-    return tf.cond(y < size_y, pad_y, lambda : image)
+        return (y_padded_image, shifted_label)
+
+    return tf.cond(y < size_y, pad_y, lambda : (image,label))
 
 
 
 
-def tf_pad_image(image : np.ndarray, size_x : int, size_y : int) -> np.ndarray :
-    return tf_pad_image_y(tf_pad_image_x(image, size_x, size_y), size_x, size_y)
+def tf_pad_image(image : np.ndarray, label : np.ndarray, size_x : int, size_y : int) -> (np.ndarray, np.ndarray) :
+    padded_image, padded_label = tf_pad_image_x(image, label, size_x, size_y)
+    padded_image, padded_label = tf_pad_image_y(padded_image, padded_label, size_x, size_y)
+    return (padded_image, padded_label)
+
+    #return tf_pad_image_y(
+            #tf_pad_image_x(image, label, size_x, size_y), label, size_x, size_y)
     #return tf.image.resize_image_with_crop_or_pad(image, 0,0, size_x, size_y)
 
 
-def resize_image(image : np.ndarray, size_x : int, size_y : int) -> np.ndarray:
+def resize_image(image : np.ndarray, size_x : int, size_y : int) -> (np.ndarray, np.ndarray):
     padded_image = tf_pad_image(image, size_x, size_y)
