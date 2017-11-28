@@ -58,7 +58,7 @@ def tf_pad_image_x(image : np.ndarray, label : np.ndarray, size_x : int, size_y 
     y = shape[1]
     z = shape[2]
 
-    pad_needed = size_x-x
+    pad_needed = tf.maximum(1,size_x-x)
     x_asd = tf.random_uniform(minval=0, maxval=pad_needed, shape=[1], seed=RANDOM_SEED, dtype=tf.int32)
     x_pad_before = tf.Session().run(x_asd)
     asd = x_pad_before[0]
@@ -70,14 +70,21 @@ def tf_pad_image_x(image : np.ndarray, label : np.ndarray, size_x : int, size_y 
         x_padded_image = tf.pad(image, padding_tensor)
 
         shifted_label = label
+        shift_tensor = [0,asd,0,asd,0,asd,0,asd]
+        """
         shifted_label[1] += asd
         shifted_label[3] += asd
         shifted_label[5] += asd
         shifted_label[7] += asd
+        """
+        shifted_label = tf.add(shifted_label, shift_tensor)
 
         return (x_padded_image, shifted_label)
 
-    return tf.cond(x < size_x, pad_x, lambda : (image, label))
+    def no_pad():
+        return tf.convert_to_tensor(image), tf.convert_to_tensor(label)
+
+    return tf.cond(x < size_x, pad_x, no_pad, name="pading_for_x", strict=True)
 
 
 def tf_pad_image_y(image : np.ndarray, label : np.ndarray, size_x : int, size_y : int) -> (np.ndarray, np.ndarray) :
@@ -86,7 +93,7 @@ def tf_pad_image_y(image : np.ndarray, label : np.ndarray, size_x : int, size_y 
     y = shape[1]
     z = shape[2]
 
-    pad_needed = size_y-y
+    pad_needed = tf.maximum(1,size_y-y)
     y_asd = tf.random_uniform(minval=0, maxval=pad_needed, shape=[1], seed=RANDOM_SEED, dtype=tf.int32)
     y_pad_before = tf.Session().run(y_asd)
     asd = y_pad_before[0]
@@ -98,14 +105,21 @@ def tf_pad_image_y(image : np.ndarray, label : np.ndarray, size_x : int, size_y 
         y_padded_image = tf.pad(image, padding_tensor)
 
         shifted_label = label
+        shift_tensor = [asd,0, asd,0, asd,0, asd,0]
+        """
         shifted_label[0] += asd
         shifted_label[2] += asd
         shifted_label[4] += asd
         shifted_label[6] += asd
+        """
+        shifted_label = tf.add(shifted_label, shift_tensor)
 
         return (y_padded_image, shifted_label)
 
-    return tf.cond(y < size_y, pad_y, lambda : (image,label))
+    def no_pad():
+        return tf.convert_to_tensor(image), tf.convert_to_tensor(label)
+
+    return tf.cond(y < size_y, pad_y, no_pad, name="padding_for_y", strict=True)
 
 
 
@@ -120,5 +134,40 @@ def tf_pad_image(image : np.ndarray, label : np.ndarray, size_x : int, size_y : 
     #return tf.image.resize_image_with_crop_or_pad(image, 0,0, size_x, size_y)
 
 
-def resize_image(image : np.ndarray, size_x : int, size_y : int) -> (np.ndarray, np.ndarray):
-    padded_image = tf_pad_image(image, size_x, size_y)
+def scale_image(image : np.ndarray, label : np.ndarray, size_x : int, size_y : int) -> (np.ndarray, np.ndarray):
+    float_image = tf.image.convert_image_dtype(image, dtype=tf.float32)
+    shape = tf.shape(image)
+
+    scaled_label = label
+    """
+    scaled_label[0] *= size_y / shape[1]
+    scaled_label[1] *= size_x / shape[0]
+    scaled_label[2] *= size_y / shape[1]
+    scaled_label[3] *= size_x / shape[0]
+    scaled_label[4] *= size_y / shape[1]
+    scaled_label[5] *= size_x / shape[0]
+    scaled_label[6] *= size_y / shape[1]
+    scaled_label[7] *= size_x / shape[0]
+    """
+    for i in range(0,8,2):
+        scaled_label[i] = tf.to_int32(scaled_label[i] * size_y / shape[1])
+
+    for i in range(1,8,2):
+        scaled_label[i] = tf.to_int32(scaled_label[i] * size_x / shape[0])
+
+    scaled_image = tf.image.resize_images(float_image, [size_x, size_y],
+            method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+
+    return scaled_image, scaled_label
+
+
+def preprocess_image(image : np.ndarray, label : np.ndarray, size_x : int, size_y : int) -> (np.ndarray, np.ndarray):
+    padded_image, padded_label = tf_pad_image(image, label, size_x, size_y)
+    #print("padded label: %s" % tf.Session().run(padded_label))
+    scaled_image, scaled_label = scale_image(padded_image, padded_label, size_x, size_y)
+
+    grayscale_image = tf.squeeze(tf.image.rgb_to_grayscale(scaled_image))
+
+    print("this has been called")
+
+    return grayscale_image, scaled_label

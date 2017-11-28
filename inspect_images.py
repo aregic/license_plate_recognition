@@ -50,7 +50,11 @@ def draw_bounding_box(image : np.ndarray, label_polygon : list, output_polygon :
         typewise both can be numpy ndarrays or list of lists
     """
     fig, ax = plt.subplots(1)
-    ax.imshow(image)
+    shape = np.shape(image)
+    if len(shape) > 2:
+        ax.imshow(image)
+    else:
+        ax.imshow(image, cmap='gray')
     bb = patches.Polygon(label_polygon, fill=False, linewidth=1, color='tab:green')
     ax.add_patch(bb)
     if output_polygon is not None:
