@@ -149,11 +149,16 @@ def scale_image(image : np.ndarray, label : np.ndarray, size_x : int, size_y : i
     scaled_label[6] *= size_y / shape[1]
     scaled_label[7] *= size_x / shape[0]
     """
+    scale_tensor = [5,5,5,5,5,5,5,5]
     for i in range(0,8,2):
-        scaled_label[i] = tf.to_int32(scaled_label[i] * size_y / shape[1])
+        #scaled_label[i] = tf.to_int32(scaled_label[i] * size_y / shape[1])
+        scale_tensor[i] = size_y / shape[1]
 
     for i in range(1,8,2):
-        scaled_label[i] = tf.to_int32(scaled_label[i] * size_x / shape[0])
+        #scaled_label[i] = tf.to_int32(scaled_label[i] * size_x / shape[0])
+        scale_tensor[i] = size_x / shape[0]
+
+    scaled_label = tf.to_int32(tf.multiply(tf.cast(scaled_label, tf.float64), tf.convert_to_tensor(scale_tensor)))
 
     scaled_image = tf.image.resize_images(float_image, [size_x, size_y],
             method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)

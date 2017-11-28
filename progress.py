@@ -12,29 +12,42 @@ def doit():
     smallest = stats[stats["x"]==stats["x"].min()]
     picloc = "./samples/" + smallest["file name"].values[0]
     #biggest = stats[stats["x"]==stats["x"].max()]
-    #picloc = "./samples/pic154.jpg"
+    picloc2 = "./samples/pic154.jpg"
     pic = scipy.ndimage.imread(picloc)
+    pic2 = scipy.ndimage.imread(picloc2)
+
     label = get_bounding_box(picloc) 
+    label2 = get_bounding_box(picloc2) 
+
     tf.reset_default_graph()
     sess = tf.Session()
     #sess = tf_debug.LocalCLIDebugWrapperSession(sess)
 
     with sess.as_default():
         sess.run(tf.global_variables_initializer())
-        respic, reslabel = tf_pad_image(pic, list(label.astype("int32").flat), 512,512)
+        respic, reslabel = preprocess_image(pic, list(label.astype("int32").flat), 512,512)
+        respic2, reslabel2 = preprocess_image(pic2, list(label2.astype("int32").flat), 512,512)
         #respic, reslabel = preprocess_image(pic, list(label.astype("int32").flat), 512,512)
         respic = respic.eval()
+        respic2 = respic2.eval()
         reslabel = reslabel
         print("reslabel: %s" % reslabel)
         #reslabel = np.asarray( [r.eval() for r in reslabel] )
         reslabel = reslabel.eval()
         reslabel = reslabel.reshape((4,2))
+        reslabel2 = reslabel2.eval()
+        reslabel2 = reslabel2.reshape((4,2))
+        
+        draw_bounding_box(respic, reslabel)
+        draw_bounding_box(respic2, reslabel2)
 
-    return respic, reslabel, label
+    return respic2, reslabel2, label2
 
 
 pic, label, origlabel = doit()
 print("Result: %s, %s, %s" % (pic,label,origlabel))
+"""
 draw_bounding_box(pic, label)
+"""
 
 
