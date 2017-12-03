@@ -12,9 +12,12 @@ def doit():
     smallest = stats[stats["x"]==stats["x"].min()]
     picloc = "./samples/" + smallest["file name"].values[0]
     #biggest = stats[stats["x"]==stats["x"].max()]
-    picloc2 = "./samples/pic154.jpg"
+    #picloc2 = "./samples/pic154.jpg"
+    picloc2 = "./samples/pic107.jpg"
     pic = scipy.ndimage.imread(picloc)
     pic2 = scipy.ndimage.imread(picloc2)
+    x,y = np.shape(pic2)
+    pic2 = np.reshape(pic2, [x,y,1])
 
     label = get_bounding_box(picloc) 
     label2 = get_bounding_box(picloc2) 
@@ -43,11 +46,14 @@ def doit():
 
     return respic2, reslabel2, label2
 
-
+"""
 pic, label, origlabel = doit()
 print("Result: %s, %s, %s" % (pic,label,origlabel))
 """
+"""
 draw_bounding_box(pic, label)
 """
+
+train_on_one_pic("./samples/pic107.jpg")
 
 
