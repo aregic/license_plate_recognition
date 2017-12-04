@@ -1,43 +1,66 @@
 import tensorflow as tf
+from tensorflow.python import debug as tf_debug
 import numpy as np
 import scipy
 from inspect_images import get_bounding_box
 import time
 from datetime import datetime
+from os import listdir
+from os.path import isfile, join
+import random
+import sys
 
 FLAGS = tf.app.flags.FLAGS
 
-# Basic model parameters.
-tf.app.flags.DEFINE_integer('batch_size', 1,
-                                    "Number of images to process in a batch.")
-"""
-tf.app.flags.DEFINE_string('data_dir', '/tmp/cifar10_data',
-                                   "Path to the CIFAR-10 data directory.")
-"""
-tf.app.flags.DEFINE_boolean('use_fp16', False,
-                                    "Train the model using fp16.")
-tf.app.flags.DEFINE_boolean('log_device_placement', False,
-                            """Whether to log device placement.""")
-tf.app.flags.DEFINE_integer('log_frequency', 10,
-                            """How often to log results to the console.""")
-tf.app.flags.DEFINE_integer('max_steps', 1,#1000000,
-                            """Number of batches to run.""")
-tf.app.flags.DEFINE_string('checkpoint_dir', './checkpoints',
-                                   "Path to dir where checkpoints are stored")
+# for ipython compatibility, because if 'autoreload' re-imports the file,
+# it will duplicate these definitions
+if "batch_size" not in tf.app.flags.FLAGS.__flags.keys():
+    tf.app.flags.DEFINE_integer('batch_size', 1,
+                                        "Number of images to process in a batch.")
+    tf.app.flags.DEFINE_string('data_dir', './samples',
+                                       "Path to the CIFAR-10 data directory.")
+    tf.app.flags.DEFINE_boolean('use_fp16', False,
+                                        "Train the model using fp16.")
+    tf.app.flags.DEFINE_boolean('log_device_placement', False,
+                                """Whether to log device placement.""")
+    tf.app.flags.DEFINE_integer('log_frequency', 10,
+                                """How often to log results to the console.""")
+    tf.app.flags.DEFINE_integer('max_steps', 3000,#1000000,
+                                """Number of batches to run.""")
+    tf.app.flags.DEFINE_string('checkpoint_dir', './checkpoints',
+                                       "Path to dir where checkpoints are stored")
+    tf.app.flags.DEFINE_boolean('debug', False, "Use debug mode")
 
 # dimensions of the input image
-SIZE_X = 512
-SIZE_Y = 512
+SIZE_X = 256
+SIZE_Y = 256
 
-RANDOM_SEED = 854654
 WEIGHT_DECAY = 0.0
 
-tf.set_random_seed = RANDOM_SEED
+#RANDOM_SEED = 3215
+#tf.set_random_seed = RANDOM_SEED
 
 NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN = 1 #200
 NUM_EPOCHS_PER_DECAY = 350.0
 LEARNING_RATE_DECAY_FACTOR = 0.1
-INITIAL_LEARNING_RATE = 0.001
+INITIAL_LEARNING_RATE = 0.0001
+NUM_PREPROCESS_THREADS = 1
+MIN_QUEUE_EXAMPLES = 0
+TRAINING_SET_RATIO = 0.8    # this ratio of the inputs will be used for training
+
+
+def progress_bar(count, total, suffix=''):
+    bar_len = 60
+    filled_len = int(round(bar_len * count / float(total)))
+
+    percents = round(100.0 * count / float(total), 1)
+    bar = '=' * filled_len + '-' * (bar_len - filled_len)
+
+    if count != total:
+        sys.stdout.write('[%s] %s%s ...%s\r' % (bar, percents, '%', suffix))
+    else:
+        print('[%s] %s%s ...%s\r' % (bar, percents, '%', suffix))
+    sys.stdout.flush()  # As suggested by Rom Ruben
 
 
 def pad_image(image : np.ndarray, size_x : int, size_y : int) -> np.ndarray :
@@ -286,13 +309,52 @@ def inference(image):
                                   tf.constant_initializer(0.0))
         softmax_linear = tf.add(tf.matmul(local4, weights), biases, name=scope.name)
 
-    return tf.reshape(softmax_linear, [4,2])
+    return tf.reshape(softmax_linear, [FLAGS.batch_size, 4,2])
 
 
 def _loss(logits, label):
     mean_squared_error = tf.losses.mean_squared_error(labels=label, predictions=logits)
     tf.add_to_collection("losses", mean_squared_error)
     return mean_squared_error
+
+
+def _generate_image_and_label_batch(image, label, min_queue_examples,
+                                    batch_size, shuffle):
+  """Construct a queued batch of images and labels.
+
+  Args:
+    image: 3-D Tensor of [height, width, 3] of type.float32.
+    label: 1-D Tensor of type.int32
+    min_queue_examples: int32, minimum number of samples to retain
+      in the queue that provides of batches of examples.
+    batch_size: Number of images per batch.
+    shuffle: boolean indicating whether to use a shuffling queue.
+
+  Returns:
+    images: Images. 4D tensor of [batch_size, height, width, 3] size.
+    labels: Labels. 1D tensor of [batch_size] size.
+  """
+  # Create a queue that shuffles the examples, and then
+  # read 'batch_size' images + labels from the example queue.
+  num_preprocess_threads = 16
+  if shuffle:
+    images, label_batch = tf.train.shuffle_batch(
+        [image, label],
+        batch_size=batch_size,
+        num_threads=num_preprocess_threads,
+        capacity=min_queue_examples + 3 * batch_size,
+        min_after_dequeue=min_queue_examples)
+  else:
+    images, label_batch = tf.train.batch(
+        [image, label],
+        batch_size=batch_size,
+        num_threads=num_preprocess_threads,
+        capacity=min_queue_examples + 3 * batch_size)
+
+  # Display the training images in the visualizer.
+  tf.summary.image('images', images)
+
+  return images, tf.reshape(label_batch, [batch_size])
 
 
 def train(total_loss, global_step):
@@ -325,19 +387,186 @@ def train(total_loss, global_step):
     return train_op
 
 
-def train_on_one_pic(picloc : dir):
+def resize_label(label : np.ndarray, width : int, height : int):
+    newlabel = np.reshape(label.copy(), [8])
+    for i in range(0,8,2):
+        newlabel[i] = int(newlabel[i] * SIZE_X/float(width))
+    for i in range(1,8,2):
+        newlabel[i] = int(newlabel[i] * SIZE_Y/float(height))
+
+    return np.reshape(newlabel, [4,2])
+
+
+def get_image_list(sample_folder : dir):
+    res = []
+    for f in listdir(sample_folder):
+        if isfile(join(sample_folder, f)):
+            if f.endswith(".jpg"): 
+                res.append(f)
+
+    return res
+
+
+def preprocess(image : np.ndarray, label : np.ndarray):
+    im_shape = np.shape(image)
+    image = scipy.misc.imresize(image, [SIZE_X, SIZE_Y])
+    image = np.reshape(image, [SIZE_X, SIZE_Y, 1])
+
+    label = resize_label(label, im_shape[1], im_shape[0])
+
+    return image, label
+
+
+def eval_on_pic(picloc : dir):
+    tf.reset_default_graph()
     with tf.Graph().as_default():
         global_step = tf.contrib.framework.get_or_create_global_step()
 
-        image = scipy.ndimage.imread(picloc)
-        image = scipy.misc.imresize(image, [124,124])
-        image = np.reshape(image, [1,124,124,1])
-        label = get_bounding_box(picloc)
 
+        images, labels = (0,0)
+        
+        images = []
+        labels = []
+
+        pic = scipy.ndimage.imread(picloc, mode="L")
+
+        fullpicloc = picloc
+        
+        image = scipy.ndimage.imread(fullpicloc, mode="L")
+        label = get_bounding_box(fullpicloc)
+
+        image, label = preprocess(image, label)
         float_image = tf.image.convert_image_dtype(image, dtype=tf.float32)
-        logits = inference(float_image)
+        
+        """
+        images, labels = tf.train.shuffle_batch(
+                [float_image, label],
+                batch_size=FLAGS.batch_size,
+                num_threads=NUM_PREPROCESS_THREADS,
+                capacity=MIN_QUEUE_EXAMPLES + 3 * FLAGS.batch_size,
+                min_after_dequeue=MIN_QUEUE_EXAMPLES)           
+        """
+        images.append(float_image)
+        labels.append(label)
+
+        images = tf.convert_to_tensor(images, dtype=tf.float32)
+        labels = np.asarray(labels)
+        logits = inference(images)
         print("logits: %s" % logits)
-        loss = _loss(logits,label)
+        loss = _loss(logits,labels)
+
+        train_op = train(loss, global_step)
+        saver = tf.train.Saver()
+
+        with tf.Session().as_default() as sess:
+            if FLAGS.debug:
+                sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+            saver.restore(sess, join(FLAGS.checkpoint_dir, "model.ckpt-1500"))
+            print("model restored")
+            inferenced_label = sess.run(logits)
+            res = sess.run(loss)
+            res_images = np.reshape(sess.run(images), [1, SIZE_X, SIZE_Y])
+
+        return res_images, labels, inferenced_label, res
+
+
+def eval_network(picloc : dir, eval_size = 10):
+    tf.reset_default_graph()
+    with tf.Graph().as_default():
+        global_step = tf.contrib.framework.get_or_create_global_step()
+
+
+        pics = get_image_list(picloc)
+        images, labels = (0,0)
+        
+        #random.seed(RANDOM_SEED)
+        random.shuffle(pics)
+        training_set_size = int(TRAINING_SET_RATIO*len(pics))
+        validation_pics = pics[training_set_size:]
+        images = []
+        labels = []
+
+        for i in range(eval_size):
+            pic = validation_pics[i]
+            #bar.update(i+1)
+            progress_bar(i+1, eval_size)
+
+            fullpicloc = join(picloc, pic)
+            
+            image = scipy.ndimage.imread(fullpicloc, mode="L")
+            label = get_bounding_box(fullpicloc)
+
+            image, label = preprocess(image, label)
+            float_image = tf.image.convert_image_dtype(image, dtype=tf.float32)
+            
+            """
+            images, labels = tf.train.shuffle_batch(
+                    [float_image, label],
+                    batch_size=FLAGS.batch_size,
+                    num_threads=NUM_PREPROCESS_THREADS,
+                    capacity=MIN_QUEUE_EXAMPLES + 3 * FLAGS.batch_size,
+                    min_after_dequeue=MIN_QUEUE_EXAMPLES)           
+            """
+            images.append(float_image)
+            labels.append(label)
+
+        images = tf.convert_to_tensor(images, dtype=tf.float32)
+        labels = np.asarray(labels)
+        logits = inference(images)
+        print("logits: %s" % logits)
+        loss = _loss(logits,labels)
+
+        train_op = train(loss, global_step)
+        saver = tf.train.Saver()
+
+        with tf.Session().as_default() as sess:
+            if FLAGS.debug:
+                sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+            saver.restore(sess, join(FLAGS.checkpoint_dir, "model.ckpt-1500"))
+            print("model restored")
+            inferenced_label = sess.run(logits)
+            res = sess.run(loss)
+            res_images = np.reshape(sess.run(images), [eval_size, SIZE_X, SIZE_Y])
+
+        return res_images, labels, inferenced_label, res
+
+def train_on_lots_of_pics(picloc : dir):
+    tf.reset_default_graph()
+    with tf.Graph().as_default():
+        global_step = tf.contrib.framework.get_or_create_global_step()
+        pics = get_image_list(picloc)
+        images, labels = (0,0)
+
+        #random.seed(RANDOM_SEED)
+        random.shuffle(pics)
+
+        training_set_size = int(TRAINING_SET_RATIO*len(pics))
+        #training_pics = pics[:training_set_size]
+        training_pics = pics
+
+
+        for i in range(len(training_pics)):
+            pic = pics[i]
+            progress_bar(i+1, len(training_pics))
+
+            fullpicloc = join(picloc, pic)
+            
+            image = scipy.ndimage.imread(fullpicloc, mode="L")
+            label = get_bounding_box(fullpicloc)
+
+            image, label = preprocess(image, label)
+            float_image = tf.image.convert_image_dtype(image, dtype=tf.float32)
+            
+            images, labels = tf.train.shuffle_batch(
+                    [float_image, label],
+                    batch_size=FLAGS.batch_size,
+                    num_threads=NUM_PREPROCESS_THREADS,
+                    capacity=MIN_QUEUE_EXAMPLES + 3 * FLAGS.batch_size,
+                    min_after_dequeue=MIN_QUEUE_EXAMPLES)           
+
+
+        logits = inference(images)
+        loss = _loss(logits,labels)
 
         train_op = train(loss, global_step)
 
@@ -374,5 +603,7 @@ def train_on_one_pic(picloc : dir):
                    _LoggerHook()],
             config=tf.ConfigProto(
                 log_device_placement=FLAGS.log_device_placement)) as mon_sess:
+            #if FLAGS.debug:
+            #    mon_sess = tf_debug.LocalCLIDebugWrapperSession(tf.Session().as_default())
             while not mon_sess.should_stop():
                     mon_sess.run(train_op)

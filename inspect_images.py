@@ -38,7 +38,7 @@ def get_bounding_box(sample_image : dir):
     """
     textFileName = ".".join(sample_image.split(".")[:-1]) + ".txt"
     f = open(textFileName, "r")
-    coords = f.read().strip().split(",")
+    coords = f.readline().strip().split(",")
     v1,v2,v3,v4 = [coords[i:i+2] for i in range(0, len(coords), 2)] # group by 2
     return np.array([v1,v2,v3,v4]).astype("int")
 
