@@ -9,16 +9,17 @@ from os import listdir
 from os.path import isfile, join
 import random
 import sys
+import threading
 
 FLAGS = tf.app.flags.FLAGS
 
 # for ipython compatibility, because if 'autoreload' re-imports the file,
 # it would duplicate these definitions
 if "batch_size" not in tf.app.flags.FLAGS.__flags.keys():
-    tf.app.flags.DEFINE_integer('batch_size', 1,
+    tf.app.flags.DEFINE_integer('batch_size', 2,
                                         "Number of images to process in a batch.")
     tf.app.flags.DEFINE_string('data_dir', './samples',
-                                       "Path to the CIFAR-10 data directory.")
+                                       "Path to the data directory.")
     tf.app.flags.DEFINE_boolean('use_fp16', False,
                                         "Train the model using fp16.")
     tf.app.flags.DEFINE_boolean('log_device_placement', False,
@@ -44,8 +45,8 @@ NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN = 500
 NUM_EPOCHS_PER_DECAY = 2.0
 LEARNING_RATE_DECAY_FACTOR = 0.90
 INITIAL_LEARNING_RATE = 1e-7
-NUM_PREPROCESS_THREADS = 1
-MIN_QUEUE_EXAMPLES = 0
+NUM_PREPROCESS_THREADS = 4
+MIN_QUEUE_EXAMPLES = 20
 TRAINING_SET_RATIO = 0.8    # this ratio of the inputs will be used for training
 
 
@@ -541,6 +542,31 @@ def eval_network(picloc : dir, eval_size = 10, checkpoint_num : str = "10"):
         return res_images, labels, inferenced_label, res
 
 
+class threadsafe_iter:
+    """Takes an iterator/generator and makes it thread-safe by
+    serializing call to the `next` method of given iterator/generator.
+    """
+    def __init__(self, it):
+        self.it = it
+        self.lock = threading.Lock()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        with self.lock:
+            return next(self.it)
+
+
+def threadsafe_generator(f):
+    """A decorator that takes a generator function and makes it thread-safe.
+    """
+    def g(*a, **kw):
+        return threadsafe_iter(f(*a, **kw))
+    return g
+
+
+@threadsafe_generator
 def get_samples():
     pics = get_image_list(FLAGS.data_dir)
     images, labels = (0,0)
@@ -591,32 +617,100 @@ def get_samples():
     #return { "image" : images, "label" : labels }
 
 
+def load_preproc_enqueue_thread(sess, coord, enqueue_op, queue_images, queue_labels, sample_iterator):
+    while not coord.should_stop():
+        image, label = next(sample_iterator)
+
+        try:
+            sess.run(enqueue_op, feed_dict={queue_images: image, queue_labels: label})
+        except tf.errors.CancelledError:
+            return
+
+
 
 def train_on_lots_of_pics(picloc : dir):
     tf.reset_default_graph()
     with tf.Graph().as_default():
         global_step = tf.contrib.framework.get_or_create_global_step()
+        
+        enq_image = tf.placeholder(tf.int8, shape=[SIZE_X, SIZE_Y, 1])
+        enq_label = tf.placeholder(tf.int32, shape=[4, 2])
 
-        images = tf.placeholder(tf.int8, shape=[FLAGS.batch_size, SIZE_X, SIZE_Y, 1])
-        labels = tf.placeholder(tf.int32, shape=[FLAGS.batch_size, 4, 2])
-        float_images = tf.image.convert_image_dtype(images, dtype=tf.float32)
+        q = tf.RandomShuffleQueue(
+            capacity=MIN_QUEUE_EXAMPLES + (NUM_PREPROCESS_THREADS) * FLAGS.batch_size,
+            min_after_dequeue=MIN_QUEUE_EXAMPLES + FLAGS.batch_size,
+            dtypes=[tf.int8, tf.int32],
+            shapes=[[SIZE_X, SIZE_Y, 1], [4, 2]]
+        )
 
+
+        enqueue_op = q.enqueue([enq_image, enq_label])
+
+        examples_in_queue = q.size()
+        queue_close_op = q.close(cancel_pending_enqueues=True)
+
+        image_batch_queue, label_batch_queue = q.dequeue_many(FLAGS.batch_size)
+             
         """
-        images, labels = tf.train.shuffle_batch(
-                [float_image, label],
-                batch_size=FLAGS.batch_size,
-                num_threads=NUM_PREPROCESS_THREADS,
-                capacity=MIN_QUEUE_EXAMPLES + 3 * FLAGS.batch_size,
-                min_after_dequeue=MIN_QUEUE_EXAMPLES)           
+        batch_images = tf.placeholder_with_default(
+            image_batch_queue, 
+            [FLAGS.batch_size, SIZE_X, SIZE_Y, 1], name="batch_images")
+        batch_labels = tf.placeholder_with_default(
+            label_batch_queue, 
+            [FLAGS.batch_size, 4,2], name="batch_labels")        
         """
+
+        #float_images = tf.image.convert_image_dtype(batch_images, dtype=tf.float32)
+        float_images = tf.image.convert_image_dtype(image_batch_queue, dtype=tf.float32)
 
         logits = inference(float_images)
-        loss = _loss(logits,labels)
+        loss = _loss(logits,label_batch_queue)
 
         train_op = train(loss, global_step)
 
-        #dataset = tf.contrib.data.Dataset.from_generator(get_samples, (tf.int8, tf.int32))
-        #value = ds.make_one_shot_iterator().get_next()
+        coord = tf.train.Coordinator()
+
+        samples_iter = get_samples()
+
+        with tf.Session().as_default() as sess:
+            threads = []
+            for i in range(NUM_PREPROCESS_THREADS):
+                
+                print("Creating thread %i" % i)
+                t = threading.Thread(target=load_preproc_enqueue_thread, args=(
+                    sess, coord, enqueue_op, enq_image, enq_label, samples_iter
+                ))
+
+                t.setDaemon(True)
+                t.start()
+                threads.append(t)
+                coord.register_thread(t)
+                time.sleep(0.5)
+
+            num_examples_in_queue = sess.run(examples_in_queue)
+            while num_examples_in_queue < MIN_QUEUE_EXAMPLES:
+                num_examples_in_queue = sess.run(examples_in_queue)
+                for t in threads:
+                    if not t.isAlive():
+                        coord.request_stop()
+                        raise ValueError("One or more enqueuing threads crashed...")
+                time.sleep(0.1)
+
+            print("# of examples in queue: %i" % num_examples_in_queue)
+            sess.run(tf.global_variables_initializer())
+
+            last_time = time.time()
+            for i in range(FLAGS.max_steps):
+                queued_size = sess.run(examples_in_queue)
+                #print("Number of items in queue: %i" % queued_size)
+                sess.run(train_op)
+                if (i % FLAGS.log_frequency) == 0:
+                    act_time = time.time()
+                    exec_time = act_time - last_time
+                    samples_per_sec = FLAGS.batch_size * FLAGS.log_frequency / exec_time
+                    print("Step %i, execution time: %.4f, samples/second: %.4f" % (i, exec_time, samples_per_sec) )
+                    last_time = time.time()
+
 
         class _LoggerHook(tf.train.SessionRunHook):
             """Logs loss and runtime."""
@@ -644,7 +738,6 @@ def train_on_lots_of_pics(picloc : dir):
                     print (format_str % (datetime.now(), self._step, loss_value,
                                                examples_per_sec, sec_per_batch))
 
-        samples = get_samples()
 
         with tf.train.MonitoredTrainingSession(
             checkpoint_dir=FLAGS.checkpoint_dir,
@@ -655,11 +748,9 @@ def train_on_lots_of_pics(picloc : dir):
                 log_device_placement=FLAGS.log_device_placement)) as mon_sess:
             #if FLAGS.debug:
             #    mon_sess = tf_debug.LocalCLIDebugWrapperSession(tf.Session().as_default())
+            print("Training started...")
             while not mon_sess.should_stop():
-                in_images = []
-                in_labels = []
-                for i in range(FLAGS.batch_size):
-                    in_image, in_label = next(samples)
-                    in_images.append(in_image)
-                    in_labels.append(in_label)
-                mon_sess.run(train_op, feed_dict={images: in_images, labels: in_labels})
+                queued_size = mon_sess.run(examples_in_queue)
+                print("Queued examples: %i" %queued_size)
+                print("Inner cycle")
+                mon_sess.run(train_op)
