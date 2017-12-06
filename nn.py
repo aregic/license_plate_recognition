@@ -13,9 +13,9 @@ import sys
 FLAGS = tf.app.flags.FLAGS
 
 # for ipython compatibility, because if 'autoreload' re-imports the file,
-# it will duplicate these definitions
+# it would duplicate these definitions
 if "batch_size" not in tf.app.flags.FLAGS.__flags.keys():
-    tf.app.flags.DEFINE_integer('batch_size', 10,
+    tf.app.flags.DEFINE_integer('batch_size', 1,
                                         "Number of images to process in a batch.")
     tf.app.flags.DEFINE_string('data_dir', './samples',
                                        "Path to the CIFAR-10 data directory.")
@@ -32,8 +32,8 @@ if "batch_size" not in tf.app.flags.FLAGS.__flags.keys():
     tf.app.flags.DEFINE_boolean('debug', False, "Use debug mode")
 
 # dimensions of the input image
-SIZE_X = 256
-SIZE_Y = 256
+SIZE_X = 512
+SIZE_Y = 512
 
 WEIGHT_DECAY = 0.0
 
@@ -41,9 +41,9 @@ RANDOM_SEED = 32122
 #tf.set_random_seed = RANDOM_SEED
 
 NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN = 500
-NUM_EPOCHS_PER_DECAY = 10.0
-LEARNING_RATE_DECAY_FACTOR = 0.95
-INITIAL_LEARNING_RATE = 0.00002
+NUM_EPOCHS_PER_DECAY = 2.0
+LEARNING_RATE_DECAY_FACTOR = 0.90
+INITIAL_LEARNING_RATE = 1e-7
 NUM_PREPROCESS_THREADS = 1
 MIN_QUEUE_EXAMPLES = 0
 TRAINING_SET_RATIO = 0.8    # this ratio of the inputs will be used for training
@@ -59,7 +59,7 @@ def progress_bar(count, total, prefix='', suffix=''):
     if count != total:
         sys.stdout.write('%s[%s] %s%s ...%s\r' % (prefix, bar, percents, '%', suffix))
     else:
-        print('[%s] %s%s ...%s\r' % (bar, percents, '%', suffix))
+        print('%s[%s] %s%s ...%s\r' % (prefix, bar, percents, '%', suffix))
     sys.stdout.flush()
 
 
@@ -285,16 +285,19 @@ def inference(image):
     layer2 = create_layer(norm1, [5,5,64,64], 0.1, "conv2")
     pool2 = tf.nn.max_pool(layer2, ksize=[1,3,3,1], strides=[1,2,2,1], padding='SAME', name="pool2")
     norm2 = tf.nn.lrn(pool2, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm2")
+    layer3 = create_layer(norm2, [5,5,64,64], 0.1, "conv3")
+    pool3 = tf.nn.max_pool(layer3, ksize=[1,3,3,1], strides=[1,2,2,1], padding='SAME', name="pool3")
+    norm3 = tf.nn.lrn(pool3, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm3")
 
     with tf.variable_scope('local3') as scope:
         # Move everything into depth so we can perform a single matrix multiply.
-        reshape = tf.reshape(pool2, [FLAGS.batch_size, -1])
+        reshape = tf.reshape(norm3, [FLAGS.batch_size, -1])
         dim = reshape.get_shape()[1].value
         weights = _variable_with_weight_decay('weights', shape=[dim, 384],
                                           stddev=0.04, wd=0.004)
         biases = _variable_on_cpu('biases', [384], tf.constant_initializer(0.1))
         local3 = tf.nn.relu(tf.matmul(reshape, weights) + biases, name=scope.name)
-        dropped_local3 = tf.nn.dropout(local3, 0.8)
+        dropped_local3 = tf.nn.dropout(local3, 0.5)
  
     # local4
     with tf.variable_scope('local4') as scope:
@@ -302,7 +305,7 @@ def inference(image):
                                               stddev=0.04, wd=0.004)
         biases = _variable_on_cpu('biases', [192], tf.constant_initializer(0.1))
         local4 = tf.nn.relu(tf.matmul(dropped_local3, weights) + biases, name=scope.name)
-        dropped_local4 = tf.nn.dropout(local4, 0.8)
+        dropped_local4 = tf.nn.dropout(local4, 0.5)
 
     with tf.variable_scope('softmax_linear') as scope:
         weights = _variable_with_weight_decay('weights', [192, OUTPUT_DIM],
@@ -372,7 +375,8 @@ def train(total_loss, global_step):
                                     staircase=True)
     tf.summary.scalar('learning_rate', lr)
 
-    opt = tf.train.GradientDescentOptimizer(lr)
+    #opt = tf.train.GradientDescentOptimizer(lr)
+    opt = tf.train.MomentumOptimizer(lr, lr)
     grads = opt.compute_gradients(total_loss)
 
     apply_gradient_op = opt.apply_gradients(grads, global_step=global_step)
@@ -415,6 +419,8 @@ def preprocess(image : np.ndarray, label : np.ndarray):
     im_shape = np.shape(image)
     image = scipy.misc.imresize(image, [SIZE_X, SIZE_Y])
     image = np.reshape(image, [SIZE_X, SIZE_Y, 1])
+    image = image - image.mean()
+    image = image / np.linalg.norm(image)
 
     label = resize_label(label, im_shape[1], im_shape[0])
 
@@ -474,7 +480,7 @@ def eval_on_pic(picloc : dir):
         return res_images, labels, inferenced_label, res
 
 
-def eval_network(picloc : dir, eval_size = 10):
+def eval_network(picloc : dir, eval_size = 10, checkpoint_num : str = "10"):
     tf.reset_default_graph()
     with tf.Graph().as_default():
         global_step = tf.contrib.framework.get_or_create_global_step()
@@ -526,7 +532,7 @@ def eval_network(picloc : dir, eval_size = 10):
         with tf.Session().as_default() as sess:
             if FLAGS.debug:
                 sess = tf_debug.LocalCLIDebugWrapperSession(sess)
-            saver.restore(sess, join(FLAGS.checkpoint_dir, "model.ckpt-10"))
+            saver.restore(sess, join(FLAGS.checkpoint_dir, "model.ckpt-"+str(checkpoint_num)))
             print("model restored")
             inferenced_label = sess.run(logits)
             res = sess.run(loss)
@@ -544,16 +550,28 @@ def get_samples():
     training_pics = pics[:training_set_size]
     #training_pics = pics
 
+    samples = []
+    for i in range(len(training_pics)):
+        picloc = training_pics[i]
+        progress_bar(i+1, len(training_pics), "Loading images: ")
+        fullpicloc = join(FLAGS.data_dir, picloc)
+        pic = scipy.ndimage.imread(fullpicloc, mode="L")
+        label = get_bounding_box(fullpicloc)
+        
+        pic,label = preprocess(pic, label)
+
+        samples.append({ "pic" : pic, "label" : label})
+
+
     i = 0
 
-    images = []
-    labels = []
     #for i in range(len(training_pics)):
     while True:
         seed = random.randint(0,10000)
         random.seed(seed)
-        random.shuffle(training_pics)
-        for i in range(len(training_pics)):
+        random.shuffle(samples)
+        for i in range(len(samples)):
+            """
             pic = training_pics[i]
             progress_bar(i+1, len(training_pics))
 
@@ -564,8 +582,11 @@ def get_samples():
 
             image, label = preprocess(image, label)
             yield image, label
+            """
             #images.append(image)
             #labels.append(label)
+            yield samples[i]["pic"], samples[i]["label"]
+
 
     #return { "image" : images, "label" : labels }
 
