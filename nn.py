@@ -48,7 +48,7 @@ INITIAL_LEARNING_RATE = 1e-7
 NUM_PREPROCESS_THREADS = 4
 MIN_QUEUE_EXAMPLES = 20
 TRAINING_SET_RATIO = 0.8    # this ratio of the inputs will be used for training
-
+CYCLES_PER_SAVE = 100
 
 def progress_bar(count, total, prefix='', suffix=''):
     bar_len = 60
@@ -263,11 +263,11 @@ def _variable_on_cpu(name, shape, initializer):
   return var
 
 
-def create_layer(image, shape : np.ndarray, initialial_value : float, scope_name):
+def create_layer(image, shape : np.ndarray, initialial_value : float, stddev : float, scope_name : str):
     with tf.variable_scope(scope_name) as scope:
         kernel = _variable_with_weight_decay('weights',
                                              shape=shape,
-                                             stddev=5e-2,
+                                             stddev=stddev,  #originally: 5e-2,
                                              wd=0.0)
         conv = tf.nn.conv2d(image, kernel, [1, 1, 1, 1], padding='SAME')
         biases = _variable_on_cpu('biases', [64], tf.constant_initializer(initialial_value))
@@ -280,13 +280,13 @@ OUTPUT_DIM=8
 
 
 def inference(image):
-    layer1 = create_layer(image, [5,5,1,64], 0.0, "conv1")
+    layer1 = create_layer(image, [5,5,1,64], 0.0, 5e-2, "conv1")
     pool1 = tf.nn.max_pool(layer1, ksize=[1,3,3,1], strides=[1,2,2,1], padding='SAME', name="pool1")
     norm1 = tf.nn.lrn(pool1, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm1")
-    layer2 = create_layer(norm1, [5,5,64,64], 0.1, "conv2")
+    layer2 = create_layer(norm1, [5,5,64,64], 0.1, 3e-1, "conv2")
     pool2 = tf.nn.max_pool(layer2, ksize=[1,3,3,1], strides=[1,2,2,1], padding='SAME', name="pool2")
     norm2 = tf.nn.lrn(pool2, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm2")
-    layer3 = create_layer(norm2, [5,5,64,64], 0.1, "conv3")
+    layer3 = create_layer(norm2, [5,5,64,64], 0.1, 1e-1, "conv3")
     pool3 = tf.nn.max_pool(layer3, ksize=[1,3,3,1], strides=[1,2,2,1], padding='SAME', name="pool3")
     norm3 = tf.nn.lrn(pool3, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm3")
 
@@ -700,16 +700,24 @@ def train_on_lots_of_pics(picloc : dir):
             sess.run(tf.global_variables_initializer())
 
             last_time = time.time()
+            saver = tf.train.Saver()
+            #saver = tf.train.import_meta_graph(join(FLAGS.checkpoint_dir, "my_model.meta"))
+            if isfile(join(FLAGS.checkpoint_dir, "checkpoint")):
+                saver.restore(sess,tf.train.latest_checkpoint(FLAGS.checkpoint_dir))
+
             for i in range(FLAGS.max_steps):
                 queued_size = sess.run(examples_in_queue)
                 #print("Number of items in queue: %i" % queued_size)
-                sess.run(train_op)
+                loss_value, _ = sess.run([loss, train_op])
                 if (i % FLAGS.log_frequency) == 0:
                     act_time = time.time()
                     exec_time = act_time - last_time
                     samples_per_sec = FLAGS.batch_size * FLAGS.log_frequency / exec_time
-                    print("Step %i, execution time: %.4f, samples/second: %.4f" % (i, exec_time, samples_per_sec) )
+                    print("Step %i, loss: %f, execution time: %.4f, samples/second: %.4f" % (i, loss_value, exec_time, samples_per_sec) )
                     last_time = time.time()
+                if (i % CYCLES_PER_SAVE) == 0 and i != 0:
+                    print("Saving model...")
+                    saver.save(sess, join(FLAGS.checkpoint_dir, "my_model"))
 
 
         class _LoggerHook(tf.train.SessionRunHook):
@@ -739,6 +747,7 @@ def train_on_lots_of_pics(picloc : dir):
                                                examples_per_sec, sec_per_batch))
 
 
+        """
         with tf.train.MonitoredTrainingSession(
             checkpoint_dir=FLAGS.checkpoint_dir,
             hooks=[tf.train.StopAtStepHook(last_step=FLAGS.max_steps),
@@ -754,3 +763,4 @@ def train_on_lots_of_pics(picloc : dir):
                 print("Queued examples: %i" %queued_size)
                 print("Inner cycle")
                 mon_sess.run(train_op)
+        """
