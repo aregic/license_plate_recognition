@@ -63,6 +63,41 @@ def draw_bounding_box(image : np.ndarray, label_polygon : list, output_polygon :
     plt.show()
 
 
+def draw_float_bounding_box(image : np.ndarray, label_polygon : list, output_polygon : list = None):
+    """
+        `label_polygon` and `output_polygon` are both expected in the following form:
+          [ [x1,y1], [x2,y2], [x3,y3], [x4,y4] ]
+        typewise both can be numpy ndarrays or list of lists
+    """
+    label = np.copy(np.asarray(label_polygon))
+
+    shape = np.shape(image)
+    size_x = shape[0]
+    size_y = shape[1]
+
+    for l in label:
+        l[0] *= size_x
+        l[1] *= size_y
+
+    if output_polygon is not None:
+        output = np.asarray(output_polygon)
+        for l in output:
+            l[0] *= size_x
+            l[1] *= size_y
+
+    fig, ax = plt.subplots(1)
+    if len(shape) > 2:
+        ax.imshow(image)
+    else:
+        ax.imshow(image, cmap='gray')
+    bb = patches.Polygon(label, fill=False, linewidth=1, color='tab:green')
+    ax.add_patch(bb)
+    if output_polygon is not None:
+        bb2 = patches.Polygon(output, fill=False, linewidth=1, color='tab:red') 
+        ax.add_patch(bb2)
+    plt.show()
+
+
 def save_bounding_box(save_file : dir, image : np.ndarray, label_polygon : list, output_polygon : list = None):
     """
         `label_polygon` and `output_polygon` are both expected in the following form:

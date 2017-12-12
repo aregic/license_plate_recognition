@@ -16,15 +16,17 @@ FLAGS = tf.app.flags.FLAGS
 # for ipython compatibility, because if 'autoreload' re-imports the file,
 # it would duplicate these definitions
 if "batch_size" not in tf.app.flags.FLAGS.__flags.keys():
-    tf.app.flags.DEFINE_integer('batch_size', 2,
+    tf.app.flags.DEFINE_integer('batch_size', 10,
                                         "Number of images to process in a batch.")
     tf.app.flags.DEFINE_string('data_dir', './samples',
                                        "Path to the data directory.")
+    tf.app.flags.DEFINE_string('log_dir', './logs',
+                                       "Path to the directory where the logs are stored.")
     tf.app.flags.DEFINE_boolean('use_fp16', False,
                                         "Train the model using fp16.")
     tf.app.flags.DEFINE_boolean('log_device_placement', False,
                                 """Whether to log device placement.""")
-    tf.app.flags.DEFINE_integer('log_frequency', 10,
+    tf.app.flags.DEFINE_integer('log_frequency', 20,
                                 """How often to log results to the console.""")
     tf.app.flags.DEFINE_integer('max_steps', 1000000,
                                 """Number of batches to run.""")
@@ -42,10 +44,11 @@ RANDOM_SEED = 32122
 #tf.set_random_seed = RANDOM_SEED
 
 NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN = 500
-NUM_EPOCHS_PER_DECAY = 2.0
-LEARNING_RATE_DECAY_FACTOR = 0.90
-INITIAL_LEARNING_RATE = 1e-7
-NUM_PREPROCESS_THREADS = 4
+NUM_EPOCHS_PER_DECAY = 10.0
+LEARNING_RATE_DECAY_FACTOR = 0.8
+INITIAL_LEARNING_RATE = 1e-3
+MOMENTUM_LEARNING = 0.1
+NUM_PREPROCESS_THREADS = 8
 MIN_QUEUE_EXAMPLES = 20
 TRAINING_SET_RATIO = 0.8    # this ratio of the inputs will be used for training
 CYCLES_PER_SAVE = 100
@@ -263,36 +266,60 @@ def _variable_on_cpu(name, shape, initializer):
   return var
 
 
-def create_layer(image, shape : np.ndarray, initialial_value : float, stddev : float, scope_name : str):
+def create_layer(image, shape : np.ndarray, initialial_value : float, stddev : float, scope_name : str, dropout_rate : float = 0.0, leaky_alpha : float = 0.1):
     with tf.variable_scope(scope_name) as scope:
         kernel = _variable_with_weight_decay('weights',
                                              shape=shape,
                                              stddev=stddev,  #originally: 5e-2,
                                              wd=0.0)
         conv = tf.nn.conv2d(image, kernel, [1, 1, 1, 1], padding='SAME')
-        biases = _variable_on_cpu('biases', [64], tf.constant_initializer(initialial_value))
+        biases = _variable_on_cpu('biases', shape[3], tf.constant_initializer(initialial_value))
         pre_activation = tf.nn.bias_add(conv, biases)
-        conv1 = tf.nn.relu(pre_activation, name=scope.name)
-        return conv1
+        #conv1 = tf.nn.relu(pre_activation, name=scope.name)
+        conv1 = tf.maximum(pre_activation, leaky_alpha * pre_activation, name="leaky_relu")
+
+        if dropout_rate != 0.0:
+            dropped_conv1 = tf.nn.dropout(conv1, dropout_rate)
+            return dropped_conv1
+        else:
+            return conv1
 
 
 OUTPUT_DIM=8
 
 
 def inference(image):
-    layer1 = create_layer(image, [5,5,1,64], 0.0, 5e-2, "conv1")
-    pool1 = tf.nn.max_pool(layer1, ksize=[1,3,3,1], strides=[1,2,2,1], padding='SAME', name="pool1")
+    # lower layers are like inception-v3's
+    layer1 = create_layer(image, [7,7,1,64], 0.0, 5e-2, "conv1")
+    pool1 = tf.nn.max_pool(layer1, ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME', name="pool1")
     norm1 = tf.nn.lrn(pool1, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm1")
-    layer2 = create_layer(norm1, [5,5,64,64], 0.1, 3e-1, "conv2")
-    pool2 = tf.nn.max_pool(layer2, ksize=[1,3,3,1], strides=[1,2,2,1], padding='SAME', name="pool2")
+    layer2 = create_layer(pool1, [3,3,64,128], 0.1, 5e-2, "conv2", dropout_rate=0.5)
+    pool2 = tf.nn.max_pool(layer2, ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME', name="pool2")
     norm2 = tf.nn.lrn(pool2, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm2")
-    layer3 = create_layer(norm2, [5,5,64,64], 0.1, 1e-1, "conv3")
+     
+    layer3 = create_layer(pool2, [1,1,128,64], 0.1, 5e-2, "conv3", dropout_rate=0.5)
     pool3 = tf.nn.max_pool(layer3, ksize=[1,3,3,1], strides=[1,2,2,1], padding='SAME', name="pool3")
     norm3 = tf.nn.lrn(pool3, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm3")
 
+    layer4 = create_layer(norm3, [3,3,64,128], 0.1, 5e-2, "conv4", dropout_rate=0.5)
+    norm4 = tf.nn.lrn(layer4, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm4")
+    layer5 = create_layer(norm4, [1,1,128,128], 0.1, 3e-2, "conv5", dropout_rate=0.5)
+    norm5 = tf.nn.lrn(layer5, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm5")
+    layer6 = create_layer(norm5, [3,3,128,256], 0.1, 2e-2, "conv6", dropout_rate=0.5)
+    pool6 = tf.nn.max_pool(layer6, ksize=[1,3,3,1], strides=[1,2,2,1], padding='SAME', name="pool6")
+    norm6 = tf.nn.lrn(pool6, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm6")
+
+    layer7 = create_layer(norm6, [1,1,256,128], 0.1, 1e-3, "conv7", dropout_rate=0.5)
+    norm7 = tf.nn.lrn(layer7, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm7")
+    layer8 = create_layer(norm7, [3,3,128,256], 0.1, 2e-3, "conv8", dropout_rate=0.5)
+    norm8 = tf.nn.lrn(layer8, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm8")
+    layer9 = create_layer(norm8, [3,3,256,512], 0.1, 3e-3, "conv9", dropout_rate=0.5)
+    norm10 = tf.nn.lrn(layer9, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm6")
+
+
     with tf.variable_scope('local3') as scope:
         # Move everything into depth so we can perform a single matrix multiply.
-        reshape = tf.reshape(norm3, [FLAGS.batch_size, -1])
+        reshape = tf.reshape(norm10, [FLAGS.batch_size, -1])
         dim = reshape.get_shape()[1].value
         weights = _variable_with_weight_decay('weights', shape=[dim, 384],
                                           stddev=0.04, wd=0.004)
@@ -377,7 +404,7 @@ def train(total_loss, global_step):
     tf.summary.scalar('learning_rate', lr)
 
     #opt = tf.train.GradientDescentOptimizer(lr)
-    opt = tf.train.MomentumOptimizer(lr, lr)
+    opt = tf.train.MomentumOptimizer(lr, MOMENTUM_LEARNING)
     grads = opt.compute_gradients(total_loss)
 
     apply_gradient_op = opt.apply_gradients(grads, global_step=global_step)
@@ -421,11 +448,17 @@ def preprocess(image : np.ndarray, label : np.ndarray):
     image = scipy.misc.imresize(image, [SIZE_X, SIZE_Y])
     image = np.reshape(image, [SIZE_X, SIZE_Y, 1])
     image = image - image.mean()
-    image = image / np.linalg.norm(image)
+    pic_size = image.size
+    image = image / np.std(image)
 
     label = resize_label(label, im_shape[1], im_shape[0])
+    
+    scaled_label = np.asarray(label, dtype=np.float32)
+    for l in scaled_label:
+        l[0] /= SIZE_X
+        l[1] /= SIZE_Y
 
-    return image, label
+    return image, scaled_label
 
 
 def eval_on_pic(picloc : dir):
@@ -485,61 +518,93 @@ def eval_network(picloc : dir, eval_size = 10, checkpoint_num : str = "10"):
     tf.reset_default_graph()
     with tf.Graph().as_default():
         global_step = tf.contrib.framework.get_or_create_global_step()
-
-
-        pics = get_image_list(picloc)
-        images, labels = (0,0)
         
-        #random.seed(RANDOM_SEED)
-        random.shuffle(pics)
-        training_set_size = int(TRAINING_SET_RATIO*len(pics))
-        validation_pics = pics[training_set_size:]
-        images = []
-        labels = []
+        enq_image = tf.placeholder(tf.float32, shape=[SIZE_X, SIZE_Y, 1])
+        enq_label = tf.placeholder(tf.float32, shape=[4, 2])
 
-        for i in range(FLAGS.batch_size):
-            pic = validation_pics[i]
-            #bar.update(i+1)
-            progress_bar(i+1, eval_size)
+        q = tf.RandomShuffleQueue(
+            capacity=MIN_QUEUE_EXAMPLES + (NUM_PREPROCESS_THREADS) * FLAGS.batch_size,
+            min_after_dequeue=20,
+            dtypes=[tf.float32, tf.float32],
+            shapes=[[SIZE_X, SIZE_Y, 1], [4, 2]]
+        )
 
-            fullpicloc = join(picloc, pic)
-            
-            image = scipy.ndimage.imread(fullpicloc, mode="L")
-            label = get_bounding_box(fullpicloc)
 
-            image, label = preprocess(image, label)
-            float_image = tf.image.convert_image_dtype(image, dtype=tf.float32)
-            
-            """
-            images, labels = tf.train.shuffle_batch(
-                    [float_image, label],
-                    batch_size=FLAGS.batch_size,
-                    num_threads=NUM_PREPROCESS_THREADS,
-                    capacity=MIN_QUEUE_EXAMPLES + 3 * FLAGS.batch_size,
-                    min_after_dequeue=MIN_QUEUE_EXAMPLES)           
-            """
-            images.append(float_image)
-            labels.append(label)
+        enqueue_op = q.enqueue([enq_image, enq_label])
 
-        images = tf.convert_to_tensor(images, dtype=tf.float32)
-        labels = np.asarray(labels)
-        logits = inference(images)
-        print("logits: %s" % logits)
-        loss = _loss(logits,labels)
+        examples_in_queue = q.size()
+        queue_close_op = q.close(cancel_pending_enqueues=True)
+
+        image_batch_queue, label_batch_queue = q.dequeue_many(FLAGS.batch_size)
+             
+        """
+        batch_images = tf.placeholder_with_default(
+            image_batch_queue, 
+            [FLAGS.batch_size, SIZE_X, SIZE_Y, 1], name="batch_images")
+        batch_labels = tf.placeholder_with_default(
+            label_batch_queue, 
+            [FLAGS.batch_size, 4,2], name="batch_labels")        
+        """
+
+        #float_images = tf.image.convert_image_dtype(batch_images, dtype=tf.float32)
+        #float_images = tf.image.convert_image_dtype(image_batch_queue, dtype=tf.float32)
+
+        logits = inference(image_batch_queue)
+        loss = _loss(logits,label_batch_queue)
 
         train_op = train(loss, global_step)
-        saver = tf.train.Saver()
+
+        coord = tf.train.Coordinator()
+
+        samples_iter = get_samples()
 
         with tf.Session().as_default() as sess:
-            if FLAGS.debug:
-                sess = tf_debug.LocalCLIDebugWrapperSession(sess)
-            saver.restore(sess, join(FLAGS.checkpoint_dir, "model.ckpt-"+str(checkpoint_num)))
-            print("model restored")
-            inferenced_label = sess.run(logits)
-            res = sess.run(loss)
-            res_images = np.reshape(sess.run(images), [eval_size, SIZE_X, SIZE_Y])
+            threads = []
+            for i in range(NUM_PREPROCESS_THREADS):
+                
+                print("Creating thread %i" % i)
+                t = threading.Thread(target=load_preproc_enqueue_thread, args=(
+                    sess, coord, enqueue_op, enq_image, enq_label, samples_iter
+                ))
 
-        return res_images, labels, inferenced_label, res
+                t.setDaemon(True)
+                t.start()
+                threads.append(t)
+                coord.register_thread(t)
+                time.sleep(0.5)
+
+            num_examples_in_queue = sess.run(examples_in_queue)
+            while num_examples_in_queue < MIN_QUEUE_EXAMPLES:
+                num_examples_in_queue = sess.run(examples_in_queue)
+                for t in threads:
+                    if not t.isAlive():
+                        coord.request_stop()
+                        raise ValueError("One or more enqueuing threads crashed...")
+                time.sleep(0.1)
+
+            print("# of examples in queue: %i" % num_examples_in_queue)
+            sess.run(tf.global_variables_initializer())
+
+            last_time = time.time()
+            saver = tf.train.Saver()
+            #saver = tf.train.import_meta_graph(join(FLAGS.checkpoint_dir, "my_model.meta"))
+            if isfile(join(FLAGS.checkpoint_dir, "checkpoint")):
+                saver.restore(sess,tf.train.latest_checkpoint(FLAGS.checkpoint_dir))
+
+            print("Running model...")
+            loss_value, res_images, res_labels, orig_labels, _ = (
+                sess.run([loss, image_batch_queue, logits, label_batch_queue, train_op]))
+            print("Done.")
+            act_time = time.time()
+            exec_time = act_time - last_time
+            samples_per_sec = FLAGS.batch_size * FLAGS.log_frequency / exec_time
+            print("Step %i, loss: %f, execution time: %.4f, samples/second: %.4f" 
+                    % (i, loss_value, exec_time, samples_per_sec) )
+            last_time = time.time()
+
+        coord.request_stop()
+
+        return res_images, res_labels, loss_value, orig_labels
 
 
 class threadsafe_iter:
@@ -633,13 +698,13 @@ def train_on_lots_of_pics(picloc : dir):
     with tf.Graph().as_default():
         global_step = tf.contrib.framework.get_or_create_global_step()
         
-        enq_image = tf.placeholder(tf.int8, shape=[SIZE_X, SIZE_Y, 1])
-        enq_label = tf.placeholder(tf.int32, shape=[4, 2])
+        enq_image = tf.placeholder(tf.float32, shape=[SIZE_X, SIZE_Y, 1])
+        enq_label = tf.placeholder(tf.float32, shape=[4, 2])
 
         q = tf.RandomShuffleQueue(
             capacity=MIN_QUEUE_EXAMPLES + (NUM_PREPROCESS_THREADS) * FLAGS.batch_size,
             min_after_dequeue=MIN_QUEUE_EXAMPLES + FLAGS.batch_size,
-            dtypes=[tf.int8, tf.int32],
+            dtypes=[tf.float32, tf.float32],
             shapes=[[SIZE_X, SIZE_Y, 1], [4, 2]]
         )
 
@@ -661,9 +726,9 @@ def train_on_lots_of_pics(picloc : dir):
         """
 
         #float_images = tf.image.convert_image_dtype(batch_images, dtype=tf.float32)
-        float_images = tf.image.convert_image_dtype(image_batch_queue, dtype=tf.float32)
+        #float_images = tf.image.convert_image_dtype(image_batch_queue, dtype=tf.float32)
 
-        logits = inference(float_images)
+        logits = inference(image_batch_queue)
         loss = _loss(logits,label_batch_queue)
 
         train_op = train(loss, global_step)
@@ -705,19 +770,34 @@ def train_on_lots_of_pics(picloc : dir):
             if isfile(join(FLAGS.checkpoint_dir, "checkpoint")):
                 saver.restore(sess,tf.train.latest_checkpoint(FLAGS.checkpoint_dir))
 
+            sum_writer = tf.summary.FileWriter(FLAGS.log_dir, graph=tf.get_default_graph())
+            merged = tf.summary.merge_all()
             for i in range(FLAGS.max_steps):
-                queued_size = sess.run(examples_in_queue)
-                #print("Number of items in queue: %i" % queued_size)
-                loss_value, _ = sess.run([loss, train_op])
-                if (i % FLAGS.log_frequency) == 0:
-                    act_time = time.time()
-                    exec_time = act_time - last_time
-                    samples_per_sec = FLAGS.batch_size * FLAGS.log_frequency / exec_time
-                    print("Step %i, loss: %f, execution time: %.4f, samples/second: %.4f" % (i, loss_value, exec_time, samples_per_sec) )
-                    last_time = time.time()
-                if (i % CYCLES_PER_SAVE) == 0 and i != 0:
+                if (i % CYCLES_PER_SAVE) != 0 or i == 0:
+                    if (i % FLAGS.log_frequency) != 0:
+                        sess.run([loss, train_op])
+                    #print("Number of items in queue: %i" % queued_size)
+                    else:
+                        loss_value, _ = sess.run([loss, train_op])
+                        act_time = time.time()
+                        exec_time = act_time - last_time
+                        samples_per_sec = FLAGS.batch_size * FLAGS.log_frequency / exec_time
+                        print("Step %i, loss: %f, execution time: %.4f, samples/second: %.4f" 
+                                % (i, loss_value, exec_time, samples_per_sec) )
+                        last_time = time.time()
+                else:
                     print("Saving model...")
+                    summary, loss_value, _ = sess.run([merged, loss, train_op])
+                    sum_writer.add_summary(summary, i)
                     saver.save(sess, join(FLAGS.checkpoint_dir, "my_model"))
+                    if (i % FLAGS.log_frequency) == 0:
+                        act_time = time.time()
+                        exec_time = act_time - last_time
+                        samples_per_sec = FLAGS.batch_size * FLAGS.log_frequency / exec_time
+                        print("Step %i, loss: %f, execution time: %.4f, samples/second: %.4f" 
+                                % (i, loss_value, exec_time, samples_per_sec) )
+                        last_time = time.time()
+                   
 
 
         class _LoggerHook(tf.train.SessionRunHook):
