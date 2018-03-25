@@ -80,7 +80,7 @@ def draw_float_bounding_box(image : np.ndarray, label_polygon : list, output_pol
         l[1] *= size_y
 
     if output_polygon is not None:
-        output = np.asarray(output_polygon)
+        output = np.copy(np.asarray(output_polygon))
         for l in output:
             l[0] *= size_x
             l[1] *= size_y

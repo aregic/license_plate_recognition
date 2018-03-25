@@ -2,5 +2,17 @@
 __pychache__/
 *pyc
 
+logs/*
+checkpoints/*
+
+# don't store statistics
+loss_function/*
+stats.csv
+
 # don't store samples directly - maybe store it at a different location separately?
 samples/*
+validation_data/*
+old_training_data/*
+
+trash/*
+

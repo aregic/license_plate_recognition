@@ -35,8 +35,11 @@ if "batch_size" not in tf.app.flags.FLAGS.__flags.keys():
     tf.app.flags.DEFINE_boolean('debug', False, "Use debug mode")
 
 # dimensions of the input image
-SIZE_X = 512
-SIZE_Y = 512
+#SIZE_X = 512
+#SIZE_Y = 512
+SIZE_X = 256
+SIZE_Y = 256
+
 
 WEIGHT_DECAY = 0.0
 
@@ -44,8 +47,8 @@ RANDOM_SEED = 32122
 #tf.set_random_seed = RANDOM_SEED
 
 NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN = 500
-NUM_EPOCHS_PER_DECAY = 10.0
-LEARNING_RATE_DECAY_FACTOR = 0.8
+NUM_EPOCHS_PER_DECAY = 50.0
+LEARNING_RATE_DECAY_FACTOR = 1
 INITIAL_LEARNING_RATE = 1e-3
 MOMENTUM_LEARNING = 0.1
 NUM_PREPROCESS_THREADS = 8
@@ -293,11 +296,11 @@ def inference(image):
     layer1 = create_layer(image, [7,7,1,64], 0.0, 5e-2, "conv1")
     pool1 = tf.nn.max_pool(layer1, ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME', name="pool1")
     norm1 = tf.nn.lrn(pool1, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm1")
-    layer2 = create_layer(pool1, [3,3,64,128], 0.1, 5e-2, "conv2", dropout_rate=0.5)
+    layer2 = create_layer(norm1, [3,3,64,128], 0.1, 5e-2, "conv2", dropout_rate=0.5)
     pool2 = tf.nn.max_pool(layer2, ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME', name="pool2")
     norm2 = tf.nn.lrn(pool2, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm2")
      
-    layer3 = create_layer(pool2, [1,1,128,64], 0.1, 5e-2, "conv3", dropout_rate=0.5)
+    layer3 = create_layer(norm2, [1,1,128,64], 0.1, 5e-2, "conv3", dropout_rate=0.5)
     pool3 = tf.nn.max_pool(layer3, ksize=[1,3,3,1], strides=[1,2,2,1], padding='SAME', name="pool3")
     norm3 = tf.nn.lrn(pool3, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm3")
 
