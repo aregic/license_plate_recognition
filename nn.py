@@ -37,14 +37,22 @@ if "batch_size" not in tf.app.flags.FLAGS.__flags.keys():
 # dimensions of the input image
 #SIZE_X = 512
 #SIZE_Y = 512
+
+# number of tiles for the YOLO architecture
+TILE_NUMBER_X = 4
+TILE_NUMBER_Y = 4
+
+# sizes must be multiples of the respective TILE_NUMBER_[X|Y]s!
 SIZE_X = 256
 SIZE_Y = 256
+
+MAX_NUMBER_OF_LABELS = 4
 
 
 WEIGHT_DECAY = 0.0
 
 RANDOM_SEED = 32122
-#tf.set_random_seed = RANDOM_SEED
+tf.set_random_seed = RANDOM_SEED
 
 NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN = 500
 NUM_EPOCHS_PER_DECAY = 50.0
@@ -97,88 +105,6 @@ def pad_image(image : np.ndarray, size_x : int, size_y : int) -> np.ndarray :
                     normed_image2[i,j,k] = normed_image[i,j,k]
 
     return normed_image2
-
-
-def tf_pad_image_x(image : np.ndarray, label : np.ndarray, size_x : int, size_y : int) -> (np.ndarray, np.ndarray) :
-    shape = tf.shape(image)
-    x = shape[0]
-    y = shape[1]
-    z = shape[2]
-
-    pad_needed = tf.maximum(1,size_x-x)
-    x_asd = tf.random_uniform(minval=0, maxval=pad_needed, shape=[1], seed=RANDOM_SEED, dtype=tf.int32)
-    x_pad_before = tf.Session().run(x_asd)
-    asd = x_pad_before[0]
-
-    def pad_x():
-
-        padding_tensor = [[asd, size_x-x-asd], [0,0], [0,0]]
-        tf.Print(padding_tensor, [padding_tensor], "padding_tensor: ")
-        x_padded_image = tf.pad(image, padding_tensor)
-
-        shifted_label = label
-        shift_tensor = [0,asd,0,asd,0,asd,0,asd]
-        """
-        shifted_label[1] += asd
-        shifted_label[3] += asd
-        shifted_label[5] += asd
-        shifted_label[7] += asd
-        """
-        shifted_label = tf.add(shifted_label, shift_tensor)
-
-        return (x_padded_image, shifted_label)
-
-    def no_pad():
-        return tf.convert_to_tensor(image), tf.convert_to_tensor(label)
-
-    return tf.cond(x < size_x, pad_x, no_pad, name="pading_for_x", strict=True)
-
-
-def tf_pad_image_y(image : np.ndarray, label : np.ndarray, size_x : int, size_y : int) -> (np.ndarray, np.ndarray) :
-    shape = tf.shape(image)
-    x = shape[0]
-    y = shape[1]
-    z = shape[2]
-
-    pad_needed = tf.maximum(1,size_y-y)
-    y_asd = tf.random_uniform(minval=0, maxval=pad_needed, shape=[1], seed=RANDOM_SEED, dtype=tf.int32)
-    y_pad_before = tf.Session().run(y_asd)
-    asd = y_pad_before[0]
-
-    def pad_y():
-        padding_tensor = [[0,0], [asd, size_y-y-asd], [0,0]]
-        tf.Print(padding_tensor, [padding_tensor], "padding_tensor: ")
-        #print("padding: %s" % y_pad_before.eval())
-        y_padded_image = tf.pad(image, padding_tensor)
-
-        shifted_label = label
-        shift_tensor = [asd,0, asd,0, asd,0, asd,0]
-        """
-        shifted_label[0] += asd
-        shifted_label[2] += asd
-        shifted_label[4] += asd
-        shifted_label[6] += asd
-        """
-        shifted_label = tf.add(shifted_label, shift_tensor)
-
-        return (y_padded_image, shifted_label)
-
-    def no_pad():
-        return tf.convert_to_tensor(image), tf.convert_to_tensor(label)
-
-    return tf.cond(y < size_y, pad_y, no_pad, name="padding_for_y", strict=True)
-
-
-
-
-def tf_pad_image(image : np.ndarray, label : np.ndarray, size_x : int, size_y : int) -> (np.ndarray, np.ndarray) :
-    padded_image, padded_label = tf_pad_image_x(image, label, size_x, size_y)
-    padded_image, padded_label = tf_pad_image_y(padded_image, padded_label, size_x, size_y)
-    return (padded_image, padded_label)
-
-    #return tf_pad_image_y(
-            #tf_pad_image_x(image, label, size_x, size_y), label, size_x, size_y)
-    #return tf.image.resize_image_with_crop_or_pad(image, 0,0, size_x, size_y)
 
 
 def scale_image(image : np.ndarray, label : np.ndarray, size_x : int, size_y : int) -> (np.ndarray, np.ndarray):
@@ -288,7 +214,7 @@ def create_layer(image, shape : np.ndarray, initialial_value : float, stddev : f
             return conv1
 
 
-OUTPUT_DIM=8
+OUTPUT_DIM=4
 
 
 def inference(image):
@@ -338,15 +264,15 @@ def inference(image):
         local4 = tf.nn.relu(tf.matmul(dropped_local3, weights) + biases, name=scope.name)
         dropped_local4 = tf.nn.dropout(local4, 0.5)
 
-    with tf.variable_scope('softmax_linear') as scope:
-        weights = _variable_with_weight_decay('weights', [192, OUTPUT_DIM],
+    with tf.variable_scope('output_layer') as scope:
+        weights = _variable_with_weight_decay('weights', [192, OUTPUT_DIM * MAX_NUMBER_OF_LABELS],
                                               stddev=1/192.0, wd=0.0)
-        biases = _variable_on_cpu('biases', [OUTPUT_DIM],
+        biases = _variable_on_cpu('biases', [OUTPUT_DIM * MAX_NUMBER_OF_LABELS],
                                   tf.constant_initializer(0.0))
         softmax_linear = tf.add(tf.matmul(dropped_local4, weights), biases, name=scope.name)
         dropped_softmax = tf.nn.dropout(softmax_linear, 0.9)
 
-    return tf.reshape(dropped_softmax, [FLAGS.batch_size, 4,2])
+    return tf.reshape(dropped_softmax, [FLAGS.batch_size, MAX_NUMBER_OF_LABELS, 2, 2])
 
 
 def _loss(logits, label):
@@ -427,13 +353,13 @@ def train(total_loss, global_step):
 
 
 def resize_label(label : np.ndarray, width : int, height : int):
-    newlabel = np.reshape(label.copy(), [8])
-    for i in range(0,8,2):
+    newlabel = np.reshape(label.copy(), [4])
+    for i in range(0,4,2):
         newlabel[i] = int(newlabel[i] * SIZE_X/float(width))
-    for i in range(1,8,2):
+    for i in range(1,4,2):
         newlabel[i] = int(newlabel[i] * SIZE_Y/float(height))
 
-    return np.reshape(newlabel, [4,2])
+    return np.reshape(newlabel, [2,2])
 
 
 def get_image_list(sample_folder : dir):
@@ -446,7 +372,7 @@ def get_image_list(sample_folder : dir):
     return res
 
 
-def preprocess(image : np.ndarray, label : np.ndarray):
+def preprocess(image : np.ndarray, labels : np.ndarray):
     im_shape = np.shape(image)
     image = scipy.misc.imresize(image, [SIZE_X, SIZE_Y])
     image = np.reshape(image, [SIZE_X, SIZE_Y, 1])
@@ -454,14 +380,20 @@ def preprocess(image : np.ndarray, label : np.ndarray):
     pic_size = image.size
     image = image / np.std(image)
 
-    label = resize_label(label, im_shape[1], im_shape[0])
-    
-    scaled_label = np.asarray(label, dtype=np.float32)
-    for l in scaled_label:
-        l[0] /= SIZE_X
-        l[1] /= SIZE_Y
+    scaled_labels = []
+    for label in labels:
+        label = resize_label(label, im_shape[1], im_shape[0])
+        
+        scaled_label = np.asarray(label, dtype=np.float32)
+        for l in scaled_label:
+            l[0] /= SIZE_X
+            l[1] /= SIZE_Y
+        scaled_labels.append(scaled_label)
 
-    return image, scaled_label
+    while len(scaled_labels) < 4:
+        scaled_labels.append(np.array([[-1, -1], [-1, -1]]).astype("float32"))
+
+    return image, scaled_labels
 
 
 def eval_on_pic(picloc : dir):
@@ -470,7 +402,7 @@ def eval_on_pic(picloc : dir):
         global_step = tf.contrib.framework.get_or_create_global_step()
 
 
-        images, labels = (0,0)
+        images, labels = (0,0) # ??? TODO remove if everything works
         
         images = []
         labels = []
@@ -702,13 +634,13 @@ def train_on_lots_of_pics(picloc : dir):
         global_step = tf.contrib.framework.get_or_create_global_step()
         
         enq_image = tf.placeholder(tf.float32, shape=[SIZE_X, SIZE_Y, 1])
-        enq_label = tf.placeholder(tf.float32, shape=[4, 2])
+        enq_label = tf.placeholder(tf.float32, shape=[MAX_NUMBER_OF_LABELS, 2, 2])
 
         q = tf.RandomShuffleQueue(
             capacity=MIN_QUEUE_EXAMPLES + (NUM_PREPROCESS_THREADS) * FLAGS.batch_size,
             min_after_dequeue=MIN_QUEUE_EXAMPLES + FLAGS.batch_size,
             dtypes=[tf.float32, tf.float32],
-            shapes=[[SIZE_X, SIZE_Y, 1], [4, 2]]
+            shapes=[[SIZE_X, SIZE_Y, 1], [MAX_NUMBER_OF_LABELS, 2, 2]]
         )
 
 
@@ -730,6 +662,7 @@ def train_on_lots_of_pics(picloc : dir):
 
         #float_images = tf.image.convert_image_dtype(batch_images, dtype=tf.float32)
         #float_images = tf.image.convert_image_dtype(image_batch_queue, dtype=tf.float32)
+
 
         logits = inference(image_batch_queue)
         loss = _loss(logits,label_batch_queue)
