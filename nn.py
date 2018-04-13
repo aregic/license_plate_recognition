@@ -1,15 +1,14 @@
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
 import numpy as np
-import scipy
 from inspect_images import get_bounding_box
 import time
 from datetime import datetime
-from os import listdir
-from os.path import isfile, join
 import random
 import sys
 import threading
+
+from preprocessor import *
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -39,8 +38,8 @@ if "batch_size" not in tf.app.flags.FLAGS.__flags.keys():
 #SIZE_Y = 512
 
 # number of tiles for the YOLO architecture
-TILE_NUMBER_X = 4
-TILE_NUMBER_Y = 4
+TILE_NUMBER_X = 16
+TILE_NUMBER_Y = 16
 
 # sizes must be multiples of the respective TILE_NUMBER_[X|Y]s!
 SIZE_X = 256
@@ -139,18 +138,6 @@ def scale_image(image : np.ndarray, label : np.ndarray, size_x : int, size_y : i
     return scaled_image, scaled_label
 
 
-def preprocess_image(image : np.ndarray, label : np.ndarray, size_x : int, size_y : int) -> (np.ndarray, np.ndarray):
-    padded_image, padded_label = tf_pad_image(image, label, size_x, size_y)
-    #print("padded label: %s" % tf.Session().run(padded_label))
-    scaled_image, scaled_label = scale_image(padded_image, padded_label, size_x, size_y)
-
-    grayscale_image = tf.squeeze(tf.image.rgb_to_grayscale(scaled_image))
-
-    print("this has been called")
-
-    return grayscale_image, scaled_label
-
-
 def _variable_with_weight_decay(name, shape, stddev, wd):
   """Helper to create an initialized Variable with weight decay.
 
@@ -195,7 +182,8 @@ def _variable_on_cpu(name, shape, initializer):
   return var
 
 
-def create_layer(image, shape : np.ndarray, initialial_value : float, stddev : float, scope_name : str, dropout_rate : float = 0.0, leaky_alpha : float = 0.1):
+def create_layer(image, shape : np.ndarray, initialial_value : float, stddev : float, 
+                 scope_name : str, dropout_rate : float = 0.0, leaky_alpha : float = 0.1):
     with tf.variable_scope(scope_name) as scope:
         kernel = _variable_with_weight_decay('weights',
                                              shape=shape,
@@ -205,7 +193,8 @@ def create_layer(image, shape : np.ndarray, initialial_value : float, stddev : f
         biases = _variable_on_cpu('biases', shape[3], tf.constant_initializer(initialial_value))
         pre_activation = tf.nn.bias_add(conv, biases)
         #conv1 = tf.nn.relu(pre_activation, name=scope.name)
-        conv1 = tf.maximum(pre_activation, leaky_alpha * pre_activation, name="leaky_relu")
+        #conv1 = tf.maximum(pre_activation, leaky_alpha * pre_activation, name="leaky_relu")
+        conv1 = leakyRelu(pre_activation, leaky_alpha)
 
         if dropout_rate != 0.0:
             dropped_conv1 = tf.nn.dropout(conv1, dropout_rate)
@@ -214,19 +203,23 @@ def create_layer(image, shape : np.ndarray, initialial_value : float, stddev : f
             return conv1
 
 
+def leakyRelu(pre_activation, leaky_alpha : float = 0.1):
+    return tf.maximum(pre_activation, leaky_alpha * pre_activation, name="leaky_relu")
+
+
 OUTPUT_DIM=4
 
 
 def inference(image):
     # lower layers are like inception-v3's
-    layer1 = create_layer(image, [7,7,1,64], 0.0, 5e-2, "conv1")
+    layer1 = create_layer(image, [7,7,1,8], 0.0, 5e-2, "conv1")
     pool1 = tf.nn.max_pool(layer1, ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME', name="pool1")
     norm1 = tf.nn.lrn(pool1, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm1")
-    layer2 = create_layer(norm1, [3,3,64,128], 0.1, 5e-2, "conv2", dropout_rate=0.5)
+    layer2 = create_layer(norm1, [3,3,8,32], 0.1, 5e-2, "conv2", dropout_rate=0.5)
     pool2 = tf.nn.max_pool(layer2, ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME', name="pool2")
     norm2 = tf.nn.lrn(pool2, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm2")
      
-    layer3 = create_layer(norm2, [1,1,128,64], 0.1, 5e-2, "conv3", dropout_rate=0.5)
+    layer3 = create_layer(norm2, [1,1,32,64], 0.1, 5e-2, "conv3", dropout_rate=0.5)
     pool3 = tf.nn.max_pool(layer3, ksize=[1,3,3,1], strides=[1,2,2,1], padding='SAME', name="pool3")
     norm3 = tf.nn.lrn(pool3, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm3")
 
@@ -253,7 +246,9 @@ def inference(image):
         weights = _variable_with_weight_decay('weights', shape=[dim, 384],
                                           stddev=0.04, wd=0.004)
         biases = _variable_on_cpu('biases', [384], tf.constant_initializer(0.1))
-        local3 = tf.nn.relu(tf.matmul(reshape, weights) + biases, name=scope.name)
+        #local3 = tf.nn.relu(tf.matmul(reshape, weights) + biases, name=scope.name)
+        pre_act3 = tf.matmul(reshape, weights) + biases
+        local3 = leakyRelu(pre_act3)
         dropped_local3 = tf.nn.dropout(local3, 0.5)
  
     # local4
@@ -261,7 +256,9 @@ def inference(image):
         weights = _variable_with_weight_decay('weights', shape=[384, 192],
                                               stddev=0.04, wd=0.004)
         biases = _variable_on_cpu('biases', [192], tf.constant_initializer(0.1))
-        local4 = tf.nn.relu(tf.matmul(dropped_local3, weights) + biases, name=scope.name)
+        #local4 = tf.nn.relu(tf.matmul(dropped_local3, weights) + biases, name=scope.name)
+        pre_act4 = tf.matmul(dropped_local3, weights) + biases
+        local4 = leakyRelu(pre_act4)
         dropped_local4 = tf.nn.dropout(local4, 0.5)
 
     with tf.variable_scope('output_layer') as scope:
@@ -352,52 +349,9 @@ def train(total_loss, global_step):
     return train_op
 
 
-def resize_label(label : np.ndarray, width : int, height : int):
-    newlabel = np.reshape(label.copy(), [4])
-    for i in range(0,4,2):
-        newlabel[i] = int(newlabel[i] * SIZE_X/float(width))
-    for i in range(1,4,2):
-        newlabel[i] = int(newlabel[i] * SIZE_Y/float(height))
-
-    return np.reshape(newlabel, [2,2])
-
-
-def get_image_list(sample_folder : dir):
-    res = []
-    for f in listdir(sample_folder):
-        if isfile(join(sample_folder, f)):
-            if f.endswith(".jpg"): 
-                res.append(f)
-
-    return res
-
-
-def preprocess(image : np.ndarray, labels : np.ndarray):
-    im_shape = np.shape(image)
-    image = scipy.misc.imresize(image, [SIZE_X, SIZE_Y])
-    image = np.reshape(image, [SIZE_X, SIZE_Y, 1])
-    image = image - image.mean()
-    pic_size = image.size
-    image = image / np.std(image)
-
-    scaled_labels = []
-    for label in labels:
-        label = resize_label(label, im_shape[1], im_shape[0])
-        
-        scaled_label = np.asarray(label, dtype=np.float32)
-        for l in scaled_label:
-            l[0] /= SIZE_X
-            l[1] /= SIZE_Y
-        scaled_labels.append(scaled_label)
-
-    while len(scaled_labels) < 4:
-        scaled_labels.append(np.array([[-1, -1], [-1, -1]]).astype("float32"))
-
-    return image, scaled_labels
-
-
 def eval_on_pic(picloc : dir):
     tf.reset_default_graph()
+    preprocessor = Preprocessor(SIZE_X, SIZE_Y)
     with tf.Graph().as_default():
         global_step = tf.contrib.framework.get_or_create_global_step()
 
@@ -414,7 +368,7 @@ def eval_on_pic(picloc : dir):
         image = scipy.ndimage.imread(fullpicloc, mode="L")
         label = get_bounding_box(fullpicloc)
 
-        image, label = preprocess(image, label)
+        image, label = preprocessor.preprocess(image, label)
         float_image = tf.image.convert_image_dtype(image, dtype=tf.float32)
         
         images, labels = tf.train.shuffle_batch(
@@ -568,7 +522,8 @@ def threadsafe_generator(f):
 
 @threadsafe_generator
 def get_samples():
-    pics = get_image_list(FLAGS.data_dir)
+    preprocessor = Preprocessor(SIZE_X, SIZE_Y)
+    pics = preprocessor.get_image_list(FLAGS.data_dir)
     images, labels = (0,0)
 
     random.seed(RANDOM_SEED)
@@ -584,7 +539,7 @@ def get_samples():
         pic = scipy.ndimage.imread(fullpicloc, mode="L")
         label = get_bounding_box(fullpicloc)
         
-        pic,label = preprocess(pic, label)
+        pic,label = preprocessor.preprocess(pic, label)
 
         samples.append({ "pic" : pic, "label" : label})
 
@@ -628,44 +583,36 @@ def load_preproc_enqueue_thread(sess, coord, enqueue_op, queue_images, queue_lab
 
 
 
-def train_on_lots_of_pics(picloc : dir):
+def train_on_lots_of_pics(dataset_file : dir):
     tf.reset_default_graph()
     with tf.Graph().as_default():
         global_step = tf.contrib.framework.get_or_create_global_step()
-        
-        enq_image = tf.placeholder(tf.float32, shape=[SIZE_X, SIZE_Y, 1])
-        enq_label = tf.placeholder(tf.float32, shape=[MAX_NUMBER_OF_LABELS, 2, 2])
 
-        q = tf.RandomShuffleQueue(
-            capacity=MIN_QUEUE_EXAMPLES + (NUM_PREPROCESS_THREADS) * FLAGS.batch_size,
-            min_after_dequeue=MIN_QUEUE_EXAMPLES + FLAGS.batch_size,
-            dtypes=[tf.float32, tf.float32],
-            shapes=[[SIZE_X, SIZE_Y, 1], [MAX_NUMBER_OF_LABELS, 2, 2]]
-        )
+        feature = {'train/label': tf.FixedLenFeature([], tf.string),
+                   'train/image': tf.FixedLenFeature([], tf.string)}
 
+        filename_queue = tf.train.string_input_producer([dataset_file], 
+                #num_epochs=NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN,
+                #shuffle=True)
+                )
+        reader = tf.TFRecordReader()
+        _, serialized_example = reader.read(filename_queue)
+        features = tf.parse_single_example(serialized_example, features=feature)
+        decoded_image = tf.decode_raw(features['train/image'], tf.float32)
+        decoded_label = tf.decode_raw(features['train/label'], tf.float32)
 
-        enqueue_op = q.enqueue([enq_image, enq_label])
+        image = tf.reshape(decoded_image, [SIZE_X, SIZE_Y, 1])
+        label = tf.reshape(decoded_label, [MAX_NUMBER_OF_LABELS, 2, 2])
 
-        examples_in_queue = q.size()
-        queue_close_op = q.close(cancel_pending_enqueues=True)
+        capacity=MIN_QUEUE_EXAMPLES + (NUM_PREPROCESS_THREADS) * FLAGS.batch_size
+        min_after_dequeue=MIN_QUEUE_EXAMPLES + FLAGS.batch_size
 
-        image_batch_queue, label_batch_queue = q.dequeue_many(FLAGS.batch_size)
-             
-        """
-        batch_images = tf.placeholder_with_default(
-            image_batch_queue, 
-            [FLAGS.batch_size, SIZE_X, SIZE_Y, 1], name="batch_images")
-        batch_labels = tf.placeholder_with_default(
-            label_batch_queue, 
-            [FLAGS.batch_size, 4,2], name="batch_labels")        
-        """
+        pic_batch, label_batch = tf.train.shuffle_batch(
+            [image, label], batch_size=FLAGS.batch_size, capacity=capacity,
+            min_after_dequeue=min_after_dequeue, enqueue_many=False, num_threads=8)
 
-        #float_images = tf.image.convert_image_dtype(batch_images, dtype=tf.float32)
-        #float_images = tf.image.convert_image_dtype(image_batch_queue, dtype=tf.float32)
-
-
-        logits = inference(image_batch_queue)
-        loss = _loss(logits,label_batch_queue)
+        logits = inference(pic_batch)
+        loss = _loss(logits,label_batch)
 
         train_op = train(loss, global_step)
 
@@ -674,31 +621,12 @@ def train_on_lots_of_pics(picloc : dir):
         samples_iter = get_samples()
 
         with tf.Session().as_default() as sess:
-            threads = []
-            for i in range(NUM_PREPROCESS_THREADS):
-                
-                print("Creating thread %i" % i)
-                t = threading.Thread(target=load_preproc_enqueue_thread, args=(
-                    sess, coord, enqueue_op, enq_image, enq_label, samples_iter
-                ))
-
-                t.setDaemon(True)
-                t.start()
-                threads.append(t)
-                coord.register_thread(t)
-                time.sleep(0.5)
-
-            num_examples_in_queue = sess.run(examples_in_queue)
-            while num_examples_in_queue < MIN_QUEUE_EXAMPLES:
-                num_examples_in_queue = sess.run(examples_in_queue)
-                for t in threads:
-                    if not t.isAlive():
-                        coord.request_stop()
-                        raise ValueError("One or more enqueuing threads crashed...")
-                time.sleep(0.1)
-
-            print("# of examples in queue: %i" % num_examples_in_queue)
+            sess.run(tf.local_variables_initializer())
             sess.run(tf.global_variables_initializer())
+
+            # Create a coordinator and run all QueueRunner objects
+            coord = tf.train.Coordinator()
+            threads = tf.train.start_queue_runners(coord=coord)
 
             last_time = time.time()
             saver = tf.train.Saver()
@@ -733,7 +661,9 @@ def train_on_lots_of_pics(picloc : dir):
                         print("Step %i, loss: %f, execution time: %.4f, samples/second: %.4f" 
                                 % (i, loss_value, exec_time, samples_per_sec) )
                         last_time = time.time()
-                   
+
+            coord.request_stop()
+            coord.join(threads)
 
 
         class _LoggerHook(tf.train.SessionRunHook):

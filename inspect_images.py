@@ -6,6 +6,7 @@ import pandas
 import scipy.ndimage
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from tiling import TileCounter
 
 def get_image_stats(location : str):
     """
@@ -77,7 +78,32 @@ def draw_bounding_box_from_polygons(image : np.ndarray, label_polygon : list, ou
         convert_to_bounding_boxes(output_polygon))
 
 
-def draw_bounding_box(image : np.ndarray, label_polygon : list, output_polygon : list = None):
+def save_bounding_box(image : np.ndarray, 
+                      label_polygon : list,
+                      save_file_loc : dir,
+                      output_polygon : list = None,
+                      tile_num_x = 8,
+                      tile_num_y = 8):
+    _draw_bounding_box(image, label_polygon, output_polygon, tile_num_x, tile_num_y)
+    plt.savefig(save_file_loc)
+
+
+
+
+def draw_bounding_box(image : np.ndarray, 
+                      label_polygon : list,
+                      output_polygon : list = None,
+                      tile_num_x = 8,
+                      tile_num_y = 8):
+    _draw_bounding_box(image, label_polygon, output_polygon, tile_num_x, tile_num_y)
+    plt.show()
+
+
+def _draw_bounding_box(image : np.ndarray, 
+                      label_polygon : list,
+                      output_polygon : list = None,
+                      tile_num_x = 8,
+                      tile_num_y = 8):
     """
         `label_polygon` and `output_polygon` are both expected in the following form:
           [ [x1,y1], [x2,y2], [x3,y3], [x4,y4] ]
@@ -85,10 +111,20 @@ def draw_bounding_box(image : np.ndarray, label_polygon : list, output_polygon :
     """
     fig, ax = plt.subplots(1)
     shape = np.shape(image)
+    size_x = shape[1]
+    size_y = shape[0]
+
+    if draw_tiles:
+        tileCounter = TileCounter(tile_num_x, tile_num_y, size_x, size_y)
+        tile_list = tileCounter.getTiles(label_polygon)
+        draw_tiles(ax, tile_list, size_x, size_y)
+        draw_grid_on_pic(ax, size_x, size_y, tile_num_x, tile_num_y)
+
     if len(shape) > 2:
         ax.imshow(image)
     else:
         ax.imshow(image, cmap='gray')
+
     for one_label in label_polygon:
         # rectangle expects height and width and not 2nd coordinates as the 2nd vertice of the bounding box
         ax.add_patch(patches.Rectangle( 
@@ -132,17 +168,32 @@ def draw_bounding_polygon(image : np.ndarray, label_polygon : list, output_polyg
     plt.show()
 
 
-def draw_float_bounding_box(image : np.ndarray, label_polygon : list, output_polygon : list = None):
+def draw_float_bounding_box(image : np.ndarray,
+                            label_polygon : list,
+                            output_polygon : list = None,
+                            draw_tiles : bool = False,
+                            tile_num_x = 8,
+                            tile_num_y = 8):
     """
         `label_polygon` and `output_polygon` are both expected in the following form:
           [ [x1,y1], [x2,y2], [x3,y3], [x4,y4] ]
         typewise both can be numpy ndarrays or list of lists
     """
+    fig, ax = plt.subplots(1)
+
+    shape = np.shape(image)
+    size_x = shape[1]
+    size_y = shape[0]
+
+    if draw_tiles:
+        tileCounter = TileCounter(tile_num_x, tile_num_y, size_x, size_y)
+        tile_list = tileCounter.getTiles(label_polygon)
+        draw_tiles(ax, tile_list, size_x, size_y)
+
     for l in label:
         l[0] *= size_x
         l[1] *= size_y
  
-    fig, ax = plt.subplots(1)
     if len(shape) > 2:
         ax.imshow(image)
     else:
@@ -152,9 +203,7 @@ def draw_float_bounding_box(image : np.ndarray, label_polygon : list, output_pol
     for one_label in label_polygon:
         label = np.copy(np.asarray(label_polygon))
 
-        shape = np.shape(image)
-        size_x = shape[0]
-        size_y = shape[1]
+
 
         ax.add_patch(patches.Polygon(label, fill=False, linewidth=1, color='tab:green'))
 
@@ -167,6 +216,33 @@ def draw_float_bounding_box(image : np.ndarray, label_polygon : list, output_pol
             ax.add_patch(patches.Polygon(output, fill=False, linewidth=1, color='tab:red'))
 
     plt.show()
+
+
+def draw_tiles(ax, tiles : list, size_x : int, size_y : int):
+    for tile in tiles:
+        x = int(tile.getX1(size_x))
+        y = int(tile.getY1(size_y))
+        w = int(tile.getWidth(size_x))
+        h = int(tile.getHeight(size_y))
+
+        ax.add_patch(patches.Rectangle((x,y), w, h, alpha=0.8))
+
+
+def draw_grid_on_pic(ax,
+                     size_x : int,
+                     size_y : int,
+                     num_grid_x : int = 8,
+                     num_grid_y : int = 8,
+                     grid_width = 1,
+                     color = "black"):
+    for i in range(1, num_grid_x):
+        x = (i/num_grid_x) * size_x
+        ax.add_patch(patches.Rectangle( (x, 0), grid_width, size_y, color=color))
+
+    for i in range(1, num_grid_y):
+        y = (i/num_grid_y) * size_y
+        ax.add_patch(patches.Rectangle( (0, y), size_x, grid_width, color=color))
+
 
 
 def save_bounding_box(save_file : dir, image : np.ndarray, label_polygon : list, output_polygon : list = None):

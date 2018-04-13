@@ -13,6 +13,7 @@ stats.csv
 samples/*
 validation_data/*
 old_training_data/*
+*.tfrecord
 
 trash/*
 
