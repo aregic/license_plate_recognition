@@ -5,6 +5,7 @@ import scipy
 import tensorflow as tf
 from progress_bar import progress_bar
 from inspect_images import get_bounding_box
+from tiling import TileCounter
 
 RANDOM_SEED = 2343298
 TRAINING_SET_RATIO = 2
@@ -16,7 +17,8 @@ class Preprocessor():
         self.size_y = size_y
 
 
-    def preprocess(self, image : np.ndarray, labels : np.ndarray):
+    def preprocess(self, image : np.ndarray, labels : np.ndarray, train_on_tiles = False, 
+            tile_num_x = 16, tile_num_y = 16):
         im_shape = np.shape(image)
         image = scipy.misc.imresize(image, [self.size_x, self.size_y])
         image = np.reshape(image, [self.size_x, self.size_y, 1])
@@ -37,7 +39,17 @@ class Preprocessor():
         while len(scaled_labels) < 4:
             scaled_labels.append(np.array([[-1, -1], [-1, -1]]).astype("float32"))
 
-        return image.astype("float32"), scaled_labels
+        if train_on_tiles:
+            tileCounter = TileCounter(tile_num_x, tile_num_y, 1, 1)
+            #print("Shape of scaled_labels: %s" % str(np.shape(scaled_labels)))
+            #print("Scaled labels: %s" % scaled_labels)
+            # TODO reshape should not be needed here
+            tiles = tileCounter.getTilesAsMatrix(np.reshape(scaled_labels, (4, 4)))
+
+            return image.astype("float32"), np.asarray(tiles).astype("float32")
+
+        else:   # ok the else is not really needed...
+            return image.astype("float32"), scaled_labels
 
 
     def resize_label(self, label : np.ndarray, width : int, height : int):
@@ -60,7 +72,7 @@ class Preprocessor():
         return res
 
 
-    def writeDataset(self, data_dir : dir, dataset_file : dir):
+    def writeDataset(self, data_dir : dir, dataset_file : dir, train_on_tiles = False):
         """
             Creates a dataset out of the images and labels found in data_dir and writes it to the dataset_file.
             Warning! It will overwrite the dataset_file!
@@ -89,7 +101,7 @@ class Preprocessor():
                 pic = scipy.ndimage.imread(fullpicloc, mode="L")
                 label = get_bounding_box(fullpicloc)
 
-                pic,label = self.preprocess(pic, label)
+                pic,label = self.preprocess(pic, label, train_on_tiles)
 
                 pic_feature = _createBytesFeature(pic)
                 label_feature = _createBytesFeature(np.asarray(label))

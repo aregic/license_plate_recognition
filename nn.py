@@ -9,6 +9,7 @@ import sys
 import threading
 
 from preprocessor import *
+from gaborwavelet import getBasicKernels
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -31,6 +32,8 @@ if "batch_size" not in tf.app.flags.FLAGS.__flags.keys():
                                 """Number of batches to run.""")
     tf.app.flags.DEFINE_string('checkpoint_dir', './checkpoints',
                                        "Path to dir where checkpoints are stored")
+    tf.app.flags.DEFINE_integer('save_frequency', 400,
+                                """Number of batches to run.""")
     tf.app.flags.DEFINE_boolean('debug', False, "Use debug mode")
 
 # dimensions of the input image
@@ -55,13 +58,13 @@ tf.set_random_seed = RANDOM_SEED
 
 NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN = 500
 NUM_EPOCHS_PER_DECAY = 50.0
-LEARNING_RATE_DECAY_FACTOR = 1
-INITIAL_LEARNING_RATE = 1e-3
+LEARNING_RATE_DECAY_FACTOR = 0.9
+INITIAL_LEARNING_RATE = 1e-4
 MOMENTUM_LEARNING = 0.1
 NUM_PREPROCESS_THREADS = 8
 MIN_QUEUE_EXAMPLES = 20
 TRAINING_SET_RATIO = 0.8    # this ratio of the inputs will be used for training
-CYCLES_PER_SAVE = 100
+ALPHA_CUT = 0.5
 
 def progress_bar(count, total, prefix='', suffix=''):
     bar_len = 60
@@ -138,7 +141,7 @@ def scale_image(image : np.ndarray, label : np.ndarray, size_x : int, size_y : i
     return scaled_image, scaled_label
 
 
-def _variable_with_weight_decay(name, shape, stddev, wd):
+def _normal_variable_with_weight_decay(name, shape, stddev, wd):
   """Helper to create an initialized Variable with weight decay.
 
   Note that the Variable is initialized with a truncated normal distribution.
@@ -147,18 +150,37 @@ def _variable_with_weight_decay(name, shape, stddev, wd):
   Args:
     name: name of the variable
     shape: list of ints
-    stddev: standard deviation of a truncated Gaussian
+    stddev: standard deviation of the variable at initalization
     wd: add L2Loss weight decay multiplied by this float. If None, weight
         decay is not added for this Variable.
 
   Returns:
     Variable Tensor
   """
-  dtype = tf.float16 if FLAGS.use_fp16 else tf.float32
+  initializer = tf.truncated_normal_initializer(stddev=stddev, dtype=tf.float32) 
+
+  return _variable_with_weight_decay(name, shape, wd, initializer)
+
+
+def _variable_with_weight_decay(name, shape, wd, initializer):
+  """Helper to create an initialized Variable with weight decay.
+
+  Note that the Variable is initialized with a truncated normal distribution.
+  A weight decay is added only if one is specified.
+
+  Args:
+    name: name of the variable
+    shape: list of ints
+    wd: add L2Loss weight decay multiplied by this float. If None, weight
+        decay is not added for this Variable.
+
+  Returns:
+    Variable Tensor
+  """
   var = _variable_on_cpu(
       name,
       shape,
-      tf.truncated_normal_initializer(stddev=stddev, dtype=dtype))
+      initializer)
   if wd is not None:
     weight_decay = tf.multiply(tf.nn.l2_loss(var), wd, name='weight_loss')
     tf.add_to_collection('losses', weight_decay)
@@ -183,12 +205,26 @@ def _variable_on_cpu(name, shape, initializer):
 
 
 def create_layer(image, shape : np.ndarray, initialial_value : float, stddev : float, 
-                 scope_name : str, dropout_rate : float = 0.0, leaky_alpha : float = 0.1):
+                 scope_name : str, dropout_rate : float = 0.0, leaky_alpha : float = 0.1, 
+                 const_init = None):
+    if const_init is None:
+        initializer = tf.truncated_normal_initializer(stddev=stddev, dtype=tf.float32) # stddev originally: 5e-2
+    else:
+        initializer = tf.constant(const_init)
+
     with tf.variable_scope(scope_name) as scope:
-        kernel = _variable_with_weight_decay('weights',
-                                             shape=shape,
-                                             stddev=stddev,  #originally: 5e-2,
-                                             wd=0.0)
+        # the reason for this: "ValueError: If initializer is a constant, do not specify shape."
+        if const_init is None:
+            kernel = _variable_with_weight_decay('weights',
+                                                 shape=shape,
+                                                 wd=0.0,
+                                                 initializer = initializer)
+        else:
+            kernel = _variable_with_weight_decay('weights',
+                                                 shape=None,
+                                                 wd=0.0,
+                                                 initializer = initializer)
+
         conv = tf.nn.conv2d(image, kernel, [1, 1, 1, 1], padding='SAME')
         biases = _variable_on_cpu('biases', shape[3], tf.constant_initializer(initialial_value))
         pre_activation = tf.nn.bias_add(conv, biases)
@@ -212,38 +248,44 @@ OUTPUT_DIM=4
 
 def inference(image):
     # lower layers are like inception-v3's
-    layer1 = create_layer(image, [7,7,1,8], 0.0, 5e-2, "conv1")
+    basic_kernels = np.asarray([getBasicKernels()]).astype(np.float32)
+    # the swapping will effectively transpose the kernels but that doesn't matter at the moment
+    basic_kernels = np.swapaxes(basic_kernels, 0,2)
+    basic_kernels = np.swapaxes(basic_kernels, 1,3)
+    print("shape of basic_kernels: %s" % str(np.shape(basic_kernels)))
+
+    # First layer's shape: [7,7,1,8]
+    layer1 = create_layer(image, [7,7,1,10], 0.0, 5e-2, "conv1", const_init = basic_kernels)
     pool1 = tf.nn.max_pool(layer1, ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME', name="pool1")
     norm1 = tf.nn.lrn(pool1, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm1")
-    layer2 = create_layer(norm1, [3,3,8,32], 0.1, 5e-2, "conv2", dropout_rate=0.5)
+    layer2 = create_layer(norm1, [3,3,10,16], 0.1, 5e-2, "conv2", dropout_rate=0.5)
     pool2 = tf.nn.max_pool(layer2, ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME', name="pool2")
     norm2 = tf.nn.lrn(pool2, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm2")
      
-    layer3 = create_layer(norm2, [1,1,32,64], 0.1, 5e-2, "conv3", dropout_rate=0.5)
+    layer3 = create_layer(norm2, [1,1,16,32], 0.1, 5e-2, "conv3", dropout_rate=0.5)
     pool3 = tf.nn.max_pool(layer3, ksize=[1,3,3,1], strides=[1,2,2,1], padding='SAME', name="pool3")
     norm3 = tf.nn.lrn(pool3, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm3")
 
-    layer4 = create_layer(norm3, [3,3,64,128], 0.1, 5e-2, "conv4", dropout_rate=0.5)
+    layer4 = create_layer(norm3, [3,3,32,64], 0.1, 5e-2, "conv4", dropout_rate=0.5)
     norm4 = tf.nn.lrn(layer4, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm4")
-    layer5 = create_layer(norm4, [1,1,128,128], 0.1, 3e-2, "conv5", dropout_rate=0.5)
+    layer5 = create_layer(norm4, [1,1,64,64], 0.1, 3e-2, "conv5", dropout_rate=0.5)
     norm5 = tf.nn.lrn(layer5, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm5")
-    layer6 = create_layer(norm5, [3,3,128,256], 0.1, 2e-2, "conv6", dropout_rate=0.5)
+    layer6 = create_layer(norm5, [3,3,64,128], 0.1, 2e-2, "conv6", dropout_rate=0.5)
     pool6 = tf.nn.max_pool(layer6, ksize=[1,3,3,1], strides=[1,2,2,1], padding='SAME', name="pool6")
     norm6 = tf.nn.lrn(pool6, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm6")
 
-    layer7 = create_layer(norm6, [1,1,256,128], 0.1, 1e-3, "conv7", dropout_rate=0.5)
+    layer7 = create_layer(norm6, [1,1,128,128], 0.1, 1e-3, "conv7", dropout_rate=0.5)
     norm7 = tf.nn.lrn(layer7, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm7")
     layer8 = create_layer(norm7, [3,3,128,256], 0.1, 2e-3, "conv8", dropout_rate=0.5)
     norm8 = tf.nn.lrn(layer8, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm8")
     layer9 = create_layer(norm8, [3,3,256,512], 0.1, 3e-3, "conv9", dropout_rate=0.5)
     norm10 = tf.nn.lrn(layer9, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm6")
 
-
     with tf.variable_scope('local3') as scope:
         # Move everything into depth so we can perform a single matrix multiply.
         reshape = tf.reshape(norm10, [FLAGS.batch_size, -1])
         dim = reshape.get_shape()[1].value
-        weights = _variable_with_weight_decay('weights', shape=[dim, 384],
+        weights = _normal_variable_with_weight_decay('weights', shape=[dim, 384],
                                           stddev=0.04, wd=0.004)
         biases = _variable_on_cpu('biases', [384], tf.constant_initializer(0.1))
         #local3 = tf.nn.relu(tf.matmul(reshape, weights) + biases, name=scope.name)
@@ -253,7 +295,7 @@ def inference(image):
  
     # local4
     with tf.variable_scope('local4') as scope:
-        weights = _variable_with_weight_decay('weights', shape=[384, 192],
+        weights = _normal_variable_with_weight_decay('weights', shape=[384, 192],
                                               stddev=0.04, wd=0.004)
         biases = _variable_on_cpu('biases', [192], tf.constant_initializer(0.1))
         #local4 = tf.nn.relu(tf.matmul(dropped_local3, weights) + biases, name=scope.name)
@@ -262,14 +304,26 @@ def inference(image):
         dropped_local4 = tf.nn.dropout(local4, 0.5)
 
     with tf.variable_scope('output_layer') as scope:
-        weights = _variable_with_weight_decay('weights', [192, OUTPUT_DIM * MAX_NUMBER_OF_LABELS],
+        weights = _normal_variable_with_weight_decay('weights', [192, OUTPUT_DIM * MAX_NUMBER_OF_LABELS],
                                               stddev=1/192.0, wd=0.0)
         biases = _variable_on_cpu('biases', [OUTPUT_DIM * MAX_NUMBER_OF_LABELS],
                                   tf.constant_initializer(0.0))
         softmax_linear = tf.add(tf.matmul(dropped_local4, weights), biases, name=scope.name)
         dropped_softmax = tf.nn.dropout(softmax_linear, 0.9)
 
-    return tf.reshape(dropped_softmax, [FLAGS.batch_size, MAX_NUMBER_OF_LABELS, 2, 2])
+        coordinates_result = tf.reshape(dropped_softmax, [FLAGS.batch_size, MAX_NUMBER_OF_LABELS, 2, 2])
+
+    with tf.variable_scope('tile_output_layer') as scope:
+        tile_weights = _normal_variable_with_weight_decay('weights', [192, TILE_NUMBER_X * TILE_NUMBER_Y],
+                                              stddev=1/192.0, wd=0.0)
+        tile_biases = _variable_on_cpu('biases', [TILE_NUMBER_X * TILE_NUMBER_Y],
+                                  tf.constant_initializer(0.0))
+        tile_softmax_linear = tf.add(tf.matmul(dropped_local4, tile_weights), tile_biases, name=scope.name)
+        tile_dropped_softmax = tf.nn.dropout(tile_softmax_linear, 0.9)
+
+        tile_result = tf.reshape(tile_dropped_softmax, [FLAGS.batch_size, TILE_NUMBER_X, TILE_NUMBER_Y])
+
+    return coordinates_result, tile_result
 
 
 def _loss(logits, label):
@@ -330,7 +384,7 @@ def train(total_loss, global_step):
     tf.summary.scalar('learning_rate', lr)
 
     #opt = tf.train.GradientDescentOptimizer(lr)
-    opt = tf.train.MomentumOptimizer(lr, MOMENTUM_LEARNING)
+    opt = tf.train.AdamOptimizer(lr)
     grads = opt.compute_gradients(total_loss)
 
     apply_gradient_op = opt.apply_gradients(grads, global_step=global_step)
@@ -347,6 +401,17 @@ def train(total_loss, global_step):
         train_op = tf.no_op(name='train')
 
     return train_op
+
+
+def initialize_uninitialized_vars(sess):
+    from itertools import compress
+    global_vars = tf.global_variables()
+    is_not_initialized = sess.run([~(tf.is_variable_initialized(var)) \
+                                   for var in global_vars])
+    not_initialized_vars = list(compress(global_vars, is_not_initialized))
+
+    if len(not_initialized_vars):
+        sess.run(tf.variables_initializer(not_initialized_vars))
 
 
 def eval_on_pic(picloc : dir):
@@ -582,8 +647,33 @@ def load_preproc_enqueue_thread(sess, coord, enqueue_op, queue_images, queue_lab
             return
 
 
+def getPositiveTiles(tiles, alpha):
+    """
+        This function does an alpha cut, i.e. the tiles with value above or equal to alpha will be ones 
+        and the tiles with value below will be zeros.
+    """
+    cut = [[[int(x >= alpha) for x in xx] for xx in xxx] for xxx in tiles]
+    return np.asarray(cut)
 
-def train_on_lots_of_pics(dataset_file : dir):
+
+def optimistic_restore(session, save_file):
+    reader = tf.train.NewCheckpointReader(save_file)
+    saved_shapes = reader.get_variable_to_shape_map()
+    var_names = sorted([(var.name, var.name.split(':')[0]) for var in tf.global_variables()
+            if var.name.split(':')[0] in saved_shapes])
+    restore_vars = []
+    name2var = dict(zip(map(lambda x:x.name.split(':')[0], tf.global_variables()), tf.global_variables()))
+    with tf.variable_scope('', reuse=True):
+        for var_name, saved_var_name in var_names:
+            curr_var = name2var[saved_var_name]
+            var_shape = curr_var.get_shape().as_list()
+            if var_shape == saved_shapes[saved_var_name]:
+                restore_vars.append(curr_var)
+    saver = tf.train.Saver(restore_vars)
+    saver.restore(session, save_file)
+
+
+def train_on_lots_of_pics(dataset_file : dir, train_on_tiles = False):
     tf.reset_default_graph()
     with tf.Graph().as_default():
         global_step = tf.contrib.framework.get_or_create_global_step()
@@ -602,7 +692,10 @@ def train_on_lots_of_pics(dataset_file : dir):
         decoded_label = tf.decode_raw(features['train/label'], tf.float32)
 
         image = tf.reshape(decoded_image, [SIZE_X, SIZE_Y, 1])
-        label = tf.reshape(decoded_label, [MAX_NUMBER_OF_LABELS, 2, 2])
+        if train_on_tiles:
+            label = tf.reshape(decoded_label, [TILE_NUMBER_X, TILE_NUMBER_Y])
+        else:
+            label = tf.reshape(decoded_label, [MAX_NUMBER_OF_LABELS, 2, 2])
 
         capacity=MIN_QUEUE_EXAMPLES + (NUM_PREPROCESS_THREADS) * FLAGS.batch_size
         min_after_dequeue=MIN_QUEUE_EXAMPLES + FLAGS.batch_size
@@ -611,10 +704,28 @@ def train_on_lots_of_pics(dataset_file : dir):
             [image, label], batch_size=FLAGS.batch_size, capacity=capacity,
             min_after_dequeue=min_after_dequeue, enqueue_many=False, num_threads=8)
 
-        logits = inference(pic_batch)
-        loss = _loss(logits,label_batch)
+        logits, tiles = inference(pic_batch)
 
-        train_op = train(loss, global_step)
+        if train_on_tiles:
+            # if dataset is created with train_on_tiles is True, label_batch will actually
+            # contain the tile matrix...
+            # TODO fix this
+            tf.summary.image(
+                    "tile label",
+                    tf.reshape(label_batch, [FLAGS.batch_size, TILE_NUMBER_X, TILE_NUMBER_Y, 1]))
+            alpha_cut = np.full([FLAGS.batch_size, TILE_NUMBER_X, TILE_NUMBER_Y], ALPHA_CUT, dtype=np.float32)
+            tf.summary.image(
+                    "tile output",
+                    tf.cast(
+                        tf.reshape(tf.greater_equal(tiles, tf.convert_to_tensor(alpha_cut)),
+                            [FLAGS.batch_size, TILE_NUMBER_X, TILE_NUMBER_Y, 1]),
+                        dtype=tf.float32))
+            loss = _loss(tiles,label_batch)
+            train_op = train(loss, global_step)
+
+        else:
+            loss = _loss(logits,label_batch)
+            train_op = train(loss, global_step)
 
         coord = tf.train.Coordinator()
 
@@ -631,23 +742,41 @@ def train_on_lots_of_pics(dataset_file : dir):
             last_time = time.time()
             saver = tf.train.Saver()
             #saver = tf.train.import_meta_graph(join(FLAGS.checkpoint_dir, "my_model.meta"))
-            if isfile(join(FLAGS.checkpoint_dir, "checkpoint")):
-                saver.restore(sess,tf.train.latest_checkpoint(FLAGS.checkpoint_dir))
+            checkpoint_file = join(FLAGS.checkpoint_dir, "my_model")
+            if isfile(checkpoint_file):
+                #saver.restore(sess,tf.train.latest_checkpoint(FLAGS.checkpoint_dir))
+                optimistic_restore(sess, checkpoint_file)
+                initialize_uninitialized_vars(sess)
 
             sum_writer = tf.summary.FileWriter(FLAGS.log_dir, graph=tf.get_default_graph())
             merged = tf.summary.merge_all()
             for i in range(FLAGS.max_steps):
-                if (i % CYCLES_PER_SAVE) != 0 or i == 0:
+                if (i % FLAGS.save_frequency) != 0 or i == 0:
                     if (i % FLAGS.log_frequency) != 0:
                         sess.run([loss, train_op])
                     #print("Number of items in queue: %i" % queued_size)
                     else:
-                        loss_value, _ = sess.run([loss, train_op])
-                        act_time = time.time()
-                        exec_time = act_time - last_time
-                        samples_per_sec = FLAGS.batch_size * FLAGS.log_frequency / exec_time
-                        print("Step %i, loss: %f, execution time: %.4f, samples/second: %.4f" 
-                                % (i, loss_value, exec_time, samples_per_sec) )
+                        if train_on_tiles:
+                            loss_value, res_tiles, res_label_tiles, _ = sess.run([loss, tiles, label_batch, train_op])
+                            tilenum = np.count_nonzero(res_label_tiles)
+                            positive_tiles = getPositiveTiles(res_tiles, ALPHA_CUT)
+                            #print("Positive tiles: %s" % positive_tiles)
+                            missed = np.count_nonzero(res_label_tiles - positive_tiles)
+                            act_time = time.time()
+                            exec_time = act_time - last_time
+                            samples_per_sec = FLAGS.batch_size * FLAGS.log_frequency / exec_time
+                            print("Step %i, loss: %f, execution time: %.4f, samples/second: %.4f" 
+                                    % (i, loss_value, exec_time, samples_per_sec) )
+                            print("Tiles in label: %i, tile in output: %i, missed: %i" % 
+                                    (tilenum, np.count_nonzero(positive_tiles), missed))
+                        else:
+                            loss_value, _ = sess.run([loss, train_op])
+                            act_time = time.time()
+                            exec_time = act_time - last_time
+                            samples_per_sec = FLAGS.batch_size * FLAGS.log_frequency / exec_time
+                            print("Step %i, loss: %f, execution time: %.4f, samples/second: %.4f" 
+                                    % (i, loss_value, exec_time, samples_per_sec) )
+ 
                         last_time = time.time()
                 else:
                     print("Saving model...")

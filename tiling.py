@@ -44,8 +44,8 @@ class TileCounter:
 
             Output: tiles \isin M_{NxN}
         """
-        tile_x = math.floor( ( x * self.TILE_X ) )
-        tile_y = math.floor( ( y * self.TILE_Y ) )
+        tile_x = min(math.floor( ( x * self.TILE_X ) ), self.TILE_X-1)
+        tile_y = min(math.floor( ( y * self.TILE_Y ) ), self.TILE_Y-1)
         tiles[tile_x, tile_y] += 1
 
 

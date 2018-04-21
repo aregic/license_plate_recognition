@@ -93,8 +93,8 @@ def save_bounding_box(image : np.ndarray,
 def draw_bounding_box(image : np.ndarray, 
                       label_polygon : list,
                       output_polygon : list = None,
-                      tile_num_x = 8,
-                      tile_num_y = 8):
+                      tile_num_x = 16,
+                      tile_num_y = 16):
     _draw_bounding_box(image, label_polygon, output_polygon, tile_num_x, tile_num_y)
     plt.show()
 
@@ -102,8 +102,8 @@ def draw_bounding_box(image : np.ndarray,
 def _draw_bounding_box(image : np.ndarray, 
                       label_polygon : list,
                       output_polygon : list = None,
-                      tile_num_x = 8,
-                      tile_num_y = 8):
+                      tile_num_x = 16,
+                      tile_num_y = 16):
     """
         `label_polygon` and `output_polygon` are both expected in the following form:
           [ [x1,y1], [x2,y2], [x3,y3], [x4,y4] ]
@@ -202,9 +202,6 @@ def draw_float_bounding_box(image : np.ndarray,
 
     for one_label in label_polygon:
         label = np.copy(np.asarray(label_polygon))
-
-
-
         ax.add_patch(patches.Polygon(label, fill=False, linewidth=1, color='tab:green'))
 
     if output_polygon is not None:
