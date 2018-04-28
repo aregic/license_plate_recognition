@@ -55,6 +55,6 @@ draw_bounding_box(pic, label)
 """
 
 #train_on_one_pic("./samples/pic107.jpg")
-train_on_lots_of_pics("dataset256_tiles.tfrecord", train_on_tiles = True)
+train_on_lots_of_pics("dataset256_tiles.tfrecord", train_on_tiles = False, use_dataset = False)
 
 

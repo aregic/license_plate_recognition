@@ -6,6 +6,7 @@ import pandas
 import scipy.ndimage
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from tiling import TileCounter
 
 def get_image_stats(location : str):
@@ -47,7 +48,14 @@ def convert_to_bounding_boxes(labels : list) -> list:
 
 
 def get_bounding_box(sample_image : dir) -> list:
+    """
+        This function assumes that the labels describe polygon, not bounding boxes
+    """
     return convert_to_bounding_boxes(get_bounding_polygon(sample_image))
+
+
+def get_label_file_dir(image_dir : dir):
+    return ".".join(image_dir.split(".")[:-1]) + ".txt"
 
 
 def get_bounding_polygon(sample_image : dir):
@@ -60,9 +68,11 @@ def get_bounding_polygon(sample_image : dir):
             "./samples/pic331.txt"
        
         Labels are assumed to be in the following form in the label txt:
-            x1,y1,x2,y2,x3,y3,x4,y4
+            x1,y1,x2,y2[,x3,y3,x4,y4]
+
+        This function works even if only 2 vertices are provided (for bounding boxes).
     """
-    textFileName = ".".join(sample_image.split(".")[:-1]) + ".txt"
+    textFileName = get_label_file_dir(sample_image)
     f = open(textFileName, "r")
     coords = f.readline().strip().split(",")
     res = []
@@ -176,10 +186,11 @@ def draw_float_bounding_box(image : np.ndarray,
                             tile_num_y = 8):
     """
         `label_polygon` and `output_polygon` are both expected in the following form:
-          [ [x1,y1], [x2,y2], [x3,y3], [x4,y4] ]
+          [ [x1,y1], [x2,y2] ]
         typewise both can be numpy ndarrays or list of lists
     """
     fig, ax = plt.subplots(1)
+    #canvas = FigureCanvas(fig)
 
     shape = np.shape(image)
     size_x = shape[1]
@@ -190,29 +201,49 @@ def draw_float_bounding_box(image : np.ndarray,
         tile_list = tileCounter.getTiles(label_polygon)
         draw_tiles(ax, tile_list, size_x, size_y)
 
-    for l in label:
-        l[0] *= size_x
-        l[1] *= size_y
- 
-    if len(shape) > 2:
-        ax.imshow(image)
-    else:
-        ax.imshow(image, cmap='gray')
-
-
     for one_label in label_polygon:
-        label = np.copy(np.asarray(label_polygon))
-        ax.add_patch(patches.Polygon(label, fill=False, linewidth=1, color='tab:green'))
+        output = np.copy(np.asarray(one_label))
+
+        """
+        for l in output:
+            l[0] *= size_x
+            l[1] *= size_y
+        """
+        output[0][0] *= size_x
+        output[1][0] *= size_x
+        output[0][1] *= size_y
+        output[1][1] *= size_y
+
+        ax.add_patch(patches.Rectangle( 
+            (output[0][0], output[0][1]),
+            output[1][0] - output[0][0],
+            output[1][1] - output[0][1],
+            fill=True, linewidth=1, color='tab:green', alpha=0.5))
 
     if output_polygon is not None:
         for one_output in output_polygon:
-            output = np.copy(np.asarray(one_polygon))
-            for l in output:
-                l[0] *= size_x
-                l[1] *= size_y
-            ax.add_patch(patches.Polygon(output, fill=False, linewidth=1, color='tab:red'))
+            output = np.copy(np.asarray(one_output))
+
+            output[0][0] *= size_x
+            output[1][0] *= size_x
+            output[0][1] *= size_y
+            output[1][1] *= size_y
+
+            ax.add_patch(patches.Rectangle( 
+                (output[0][0], output[0][1]),
+                output[1][0] - output[0][0],
+                output[1][1] - output[0][1],
+                fill=True, linewidth=1, color='tab:blue', alpha=0.5))
+
+    ax.imshow(image, cmap='gray')
 
     plt.show()
+
+    fig.canvas.draw()
+
+    data = np.fromstring(fig.canvas.tostring_rgb(), dtype='uint8', sep='')
+    return data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+
 
 
 def draw_tiles(ax, tiles : list, size_x : int, size_y : int):
@@ -254,9 +285,9 @@ def save_bounding_box(save_file : dir, image : np.ndarray, label_polygon : list,
         ax.imshow(image)
     else:
         ax.imshow(image, cmap='gray')
-    bb = patches.Polygon(label_polygon, fill=False, linewidth=1, color='tab:green')
+    bb = patches.Polygon(label_polygon, fill=True, linewidth=1, color='tab:green', alpha=0.5)
     ax.add_patch(bb)
     if output_polygon is not None:
-        bb2 = patches.Polygon(output_polygon, fill=False, linewidth=1, color='tab:red') 
+        bb2 = patches.Polygon(output_polygon, fill=True, linewidth=1, color='tab:red', alpha=0.5) 
         ax.add_patch(bb2)
     plt.savefig(save_file)

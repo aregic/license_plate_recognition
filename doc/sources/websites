@@ -1,0 +1,43 @@
+https://blog.devcenter.co/developing-a-license-plate-recognition-system-with-machine-learning-in-python-787833569ccd
+https://towardsdatascience.com/number-plate-detection-with-supervisely-and-tensorflow-part-1-e84c74d4382c
+
+[OpenALPR]
+https://github.com/openalpr/openalpr
+
+[Facial/License Plate Detection Using a
+Two-level Cascade Classifier and a
+Single Convolutional Feature Map]
+http://journals.sagepub.com/doi/pdf/10.5772/61477
+
+[Orthogonal initialization in convolution layers]
+https://hjweide.github.io/orthogonal-initialization-in-convolutional-layers
+
+[Weight init: glorot]
+http://jmlr.org/proceedings/papers/v9/glorot10a/glorot10a.pdf
+
+[Weight initizalization]
+https://intoli.com/blog/neural-network-initialization/
+https://hjweide.github.io/orthogonal-initialization-in-convolutional-layers
+https://arxiv.org/abs/1511.06422
+
+A Robust Real-Time Automatic License Plate
+Recognition based on the YOLO Detector
+https://arxiv.org/pdf/1802.09567.pdf
+
+Benchmark for License Plate Character Segmentation
+https://arxiv.org/pdf/1607.02937.pdf
+
+License Plate Detection and Recognition Using
+Deeply Learned Convolutional Neural Networks
+https://arxiv.org/pdf/1703.07330.pdf
+
+orthogonal initialization for leaky relu!
+
+self-normalizing neural networks
+https://arxiv.org/pdf/1706.02515.pdf
+
+batch normalization
+https://towardsdatascience.com/batch-normalization-in-neural-networks-1ac91516821c
+
+deep learning
+https://arxiv.org/abs/1312.6120

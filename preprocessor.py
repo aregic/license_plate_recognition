@@ -4,12 +4,12 @@ from os.path import isfile, join
 import scipy
 import tensorflow as tf
 from progress_bar import progress_bar
-from inspect_images import get_bounding_box
+from inspect_images import get_bounding_box, get_label_file_dir, convert_to_bounding_boxes
 from tiling import TileCounter
 
 RANDOM_SEED = 2343298
 TRAINING_SET_RATIO = 2
-
+MAX_NUMBER_OF_LABELS = 5
 
 class Preprocessor():
     def __init__(self, size_x, size_y):
@@ -36,8 +36,11 @@ class Preprocessor():
                 l[1] /= self.size_y
             scaled_labels.append(scaled_label)
 
-        while len(scaled_labels) < 4:
+        while len(scaled_labels) < MAX_NUMBER_OF_LABELS:
             scaled_labels.append(np.array([[-1, -1], [-1, -1]]).astype("float32"))
+
+        while len(scaled_labels) > MAX_NUMBER_OF_LABELS:
+            del scaled_labels[-1]
 
         if train_on_tiles:
             tileCounter = TileCounter(tile_num_x, tile_num_y, 1, 1)
@@ -60,16 +63,6 @@ class Preprocessor():
             newlabel[i] = int(newlabel[i] * self.size_y/float(height))
 
         return np.reshape(newlabel, [2,2])
-
-
-    def get_image_list(self, sample_folder : dir):
-        res = []
-        for f in listdir(sample_folder):
-            if isfile(join(sample_folder, f)):
-                if f.endswith(".jpg"): 
-                    res.append(f)
-
-        return res
 
 
     def writeDataset(self, data_dir : dir, dataset_file : dir, train_on_tiles = False):
@@ -107,7 +100,7 @@ class Preprocessor():
                 label_feature = _createBytesFeature(np.asarray(label))
 
                 feature = {'train/image': pic_feature,
-                           'train/label': label_feature    }
+                           'train/label': label_feature }
 
                 example = tf.train.Example(features=tf.train.Features(feature=feature))
                 output_file.write(example.SerializeToString())
@@ -115,6 +108,37 @@ class Preprocessor():
 
     def loadDataset(self, dataset_file : dir):
         pass
+
+
+def get_image_list(sample_folder : dir, return_with_full_name = False):
+    res = []
+    for f in listdir(sample_folder):
+        fullpath = join(sample_folder, f)
+        if isfile(fullpath):
+            if f.endswith(".jpg"): 
+                if return_with_full_name:
+                    res.append(fullpath)
+                else:
+                    res.append(f)
+    return res
+
+
+def writeLabelsToFile(f, labels : list):
+    for label in labels:
+        f.write(str(label)[1:-1] + '\n')
+
+
+def convertPolygonToBoundingBox(sample_dir : dir, output_dir : dir):
+    image_list = get_image_list(sample_dir, return_with_full_name = True)
+    for image_loc in image_list:
+        labels = get_bounding_box(image_loc)
+        label_loc = get_label_file_dir(image_loc)
+        label_file_name = label_loc.split('/')[-1]
+        output_label_loc = join(output_dir, label_file_name)
+        print("Labels: %s" % labels)
+        if not isfile(output_label_loc):
+            with open(output_label_loc, 'w') as f:
+                writeLabelsToFile(f, labels)
 
 
 def _createBytesFeature(value):

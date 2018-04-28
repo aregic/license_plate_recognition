@@ -14,11 +14,12 @@ def gaussWindow(alpha, x):
     return np.sqrt(alpha/np.pi) * np.exp(-alpha*np.power(x,2))
 
 
-def gaborKernel(variance_square, xi, size = 7):
+def gaborKernel(variance_square, xi, yi, size = 7):
     mean = int(size/2)
     x = np.arange(0, size)
-    gw = gaborWavelet(size*variance_square, xi/size, x, mean)
-    return np.outer(gw,gw)
+    gw_x = gaborWavelet(size*variance_square, xi/size, x, mean)
+    gw_y = gaborWavelet(size*variance_square, yi/size, x, mean)
+    return np.outer(gw_x,gw_y)
 
 
 def horizontalGaborKernel(variance_square, xi, size = 7):
@@ -34,13 +35,50 @@ def getFlips(kernel):
     return [kernel, np.flip(kernel, 0), np.flip(kernel, 1), np.flip(np.flip(kernel, 0), 1)]
 
 
-def getBasicKernels():
-    gk = normalizeKernel(np.imag(gaborKernel(0.25, 2*np.pi)), -1,1)
-    ck = normalizeKernel(circularKernel(1.5), -1,1)
-    hg = normalizeKernel(np.imag(horizontalGaborKernel(0.25, 2*np.pi)), -1,1)
+def getBasicKernels(size : int = 7):
+    number_of_kernels = 32
+    stddev = np.sqrt(2/number_of_kernels)
+    gk = normalizeKernel(np.imag(gaborKernel(0.25, 2*np.pi, 2*np.pi, size)), -1,1) * stddev
+    gk_x = normalizeKernel(np.imag(gaborKernel(0.25, 4*np.pi, 2*np.pi, size)), -1,1) * stddev
+    gk_y = normalizeKernel(np.imag(gaborKernel(0.25, 2*np.pi, 4*np.pi, size)), -1,1) * stddev
+    ck = normalizeKernel(circularKernel(1.5, size), -1,1,) * stddev
+    hg = normalizeKernel(np.imag(horizontalGaborKernel(0.25, 2*np.pi, size)), -1,1) * stddev
+    
+    normal_kernels = []
+    # I just want to have kernel number which is a power of 2
+    number_of_normal_kernels = 14
+    for i in range(number_of_normal_kernels):
+        normal_kernels.append(np.random.rand(size,size))
 
-    return np.concatenate([getFlips(gk), [ck], [-ck], [hg], [hg.transpose()],
-            [np.flip(hg,0)], [np.flip(hg.transpose(), 1)]], axis=0)
+    return np.concatenate([getFlips(gk), getFlips(gk_x), getFlips(gk_y), [ck], [-ck], [hg], 
+            [hg.transpose()], [np.flip(hg,0)], [np.flip(hg.transpose(), 1)], normal_kernels], axis=0)
+
+
+def orthonormalInit(kernel_shape : np.ndarray):
+    """
+        This function returns an initial weight matrix for a layer. The result will be orthonormal 
+        vectors (kernels) as described at 
+        https://hjweide.github.io/orthogonal-initialization-in-convolutional-layers
+
+        The distribution will be sqrt(2/d4) as in the Glorot initialization method.
+
+        Input:
+            kernel_shape: expected to be [d1, d2, d3, d4], where kernel size is d1*d2, d3 is the input
+                channel size (ignored here), and d4 is the number of neurons (kernels) inside the layer.
+    """
+    vector_length = kernel_shape[0] * kernel_shape[1]
+    random_matrix = np.random.rand(kernel_shape[3], kernel_shape[0] * kernel_shape[1] * kernel_shape[2]) 
+    u,_,vt = np.linalg.svd(random_matrix, full_matrices=False)
+    print("svd finished, vt shape: %s" % str(np.shape(vt)))
+    w = np.reshape(vt.T, [kernel_shape[0], kernel_shape[1], kernel_shape[2], kernel_shape[3]])
+
+    # the 0.9 multiplier is there because of using leaky relu, so variance for x < 0
+    # is not 0, but 0.1 * variance(x>0)
+    stdev = np.sqrt((0.9*2)/kernel_shape[2])
+    w *= stdev
+
+    return w.astype(np.float32)
+
 
 
 
