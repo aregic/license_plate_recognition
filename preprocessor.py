@@ -4,21 +4,35 @@ from os.path import isfile, join
 import scipy
 import tensorflow as tf
 from progress_bar import progress_bar
-from inspect_images import get_bounding_box, get_label_file_dir, convert_to_bounding_boxes
+from inspect_images import *
 from tiling import TileCounter
 
 RANDOM_SEED = 2343298
 TRAINING_SET_RATIO = 2
 MAX_NUMBER_OF_LABELS = 5
 
+
+class BoundingBox():
+    def __init__(self, x, y, w, h):
+        self.x = x
+        self.y = y
+        self.w = w
+        self.h = h
+
+    def getMidPoint(self):
+        return self.x + (self.w/2), self.y + (self.h/2)
+
+
 class Preprocessor():
-    def __init__(self, size_x, size_y):
+    def __init__(self, size_x, size_y, tile_num_x, tile_num_y):
         self.size_x = size_x
         self.size_y = size_y
+        self.tile_num_x = tile_num_x
+        self.tile_num_y = tile_num_y
+        self.tileCounter = TileCounter(tile_num_x, tile_num_y, 1, 1)
 
 
-    def preprocess(self, image : np.ndarray, labels : np.ndarray, train_on_tiles = False, 
-            tile_num_x = 16, tile_num_y = 16):
+    def preprocess(self, image : np.ndarray, labels : np.ndarray, train_on_tiles = False): 
         im_shape = np.shape(image)
         image = scipy.misc.imresize(image, [self.size_x, self.size_y])
         image = np.reshape(image, [self.size_x, self.size_y, 1])
@@ -28,22 +42,20 @@ class Preprocessor():
 
         scaled_labels = []
         for label in labels:
-            label = self.resize_label(label, im_shape[1], im_shape[0])
-            
-            scaled_label = np.asarray(label, dtype=np.float32)
-            for l in scaled_label:
-                l[0] /= self.size_x
-                l[1] /= self.size_y
-            scaled_labels.append(scaled_label)
+            scaled_label = self.resize_label(label, im_shape[1], im_shape[0])
+            scaled_label.append(1)
+            #scaled_label.insert(0, 1)
+            scaled_labels.append(np.asarray(scaled_label, dtype=np.float32))
 
+        """
         while len(scaled_labels) < MAX_NUMBER_OF_LABELS:
-            scaled_labels.append(np.array([[-1, -1], [-1, -1]]).astype("float32"))
+            scaled_labels.append(np.array([-1, -1, -1, -1, 0]).astype("float32"))
 
         while len(scaled_labels) > MAX_NUMBER_OF_LABELS:
             del scaled_labels[-1]
+        """
 
         if train_on_tiles:
-            tileCounter = TileCounter(tile_num_x, tile_num_y, 1, 1)
             #print("Shape of scaled_labels: %s" % str(np.shape(scaled_labels)))
             #print("Scaled labels: %s" % scaled_labels)
             # TODO reshape should not be needed here
@@ -55,6 +67,24 @@ class Preprocessor():
             return image.astype("float32"), scaled_labels
 
 
+    def createOutputMatrix(self, labels):
+        """
+            This function is to create the output matrix for YOLO.
+
+            Shape of output: [tile_x, tile_y, 5]
+                the 5 comes from: [c, x, y, w, h], where:
+                    c : 1 if object is present, 0 if not
+                    x, y : coords of the upper-left corner
+                    w, h : widht, height
+        """
+        res = np.zeros([self.tile_x, self.tile_y, 5])
+        for label in labels:
+            x = label[0][0]
+            y = label[0][1]
+            tile_x = min(math.floor( ( x * self.tile_num_x ) ), self.tile_num_x-1)
+            tile_y = min(math.floor( ( y * self.tile_num_y ) ), self.tile_num_y-1)           
+
+
     def resize_label(self, label : np.ndarray, width : int, height : int):
         newlabel = np.reshape(label.copy(), [4])
         for i in range(0,4,2):
@@ -62,7 +92,7 @@ class Preprocessor():
         for i in range(1,4,2):
             newlabel[i] = int(newlabel[i] * self.size_y/float(height))
 
-        return np.reshape(newlabel, [2,2])
+        return newlabel
 
 
     def writeDataset(self, data_dir : dir, dataset_file : dir, train_on_tiles = False):
@@ -110,6 +140,10 @@ class Preprocessor():
         pass
 
 
+def getMidPoint(label):
+    return label[0][0] + (label[0][1] / 2), label[0][1] + (label[1][1] / 2)
+
+
 def get_image_list(sample_folder : dir, return_with_full_name = False):
     res = []
     for f in listdir(sample_folder):
@@ -122,10 +156,11 @@ def get_image_list(sample_folder : dir, return_with_full_name = False):
                     res.append(f)
     return res
 
-
+"""
 def writeLabelsToFile(f, labels : list):
     for label in labels:
         f.write(str(label)[1:-1] + '\n')
+"""
 
 
 def convertPolygonToBoundingBox(sample_dir : dir, output_dir : dir):
@@ -143,3 +178,35 @@ def convertPolygonToBoundingBox(sample_dir : dir, output_dir : dir):
 
 def _createBytesFeature(value):
     return tf.train.Feature(bytes_list=tf.train.BytesList(value=[tf.compat.as_bytes(value.tostring())]))
+
+
+def writeLabelsToFile(labels : list, file_loc : dir):
+    reshaped = np.reshape(labels, [len(labels), 4])
+    # prevent overwrite
+    if not isfile(file_loc):
+        with open(file_loc, 'w') as f:
+            for label in reshaped:
+                f.write(', '.join(map(str, label)) + '\n')
+
+
+
+def convertToHeightWidthRepr(label : list):
+    res = np.copy(label)
+    res[1][0] = res[1][0]-res[0][0]
+    res[1][1] = res[1][1]-res[0][1]
+    return res
+
+
+def convertAllToHeightWidthRepr(sample_folder : dir, output_folder : dir):
+    for f in listdir(sample_folder):
+        fullpath = join(sample_folder, f)
+        if isfile(fullpath):
+            if f.endswith('.jpg'):
+                labels = get_bounding_polygon(fullpath)
+                converted = []
+                for label in labels:
+                    converted.append( convertToHeightWidthRepr(label) )
+                output_file_path = '.'.join(join(output_folder, f).split('.')[:-1]) + '.txt'
+                writeLabelsToFile(converted, output_file_path)
+
+       

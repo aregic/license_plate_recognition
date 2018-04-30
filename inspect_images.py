@@ -9,6 +9,19 @@ import matplotlib.patches as patches
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from tiling import TileCounter
 
+
+
+class BoundingBox():
+    def __init__(self, x, y, w, h):
+        self.x = x
+        self.y = y
+        self.w = w
+        self.h = h
+
+    def getMidPoint(self):
+        return self.x + (self.w/2), self.y + (self.h/2)
+
+
 def get_image_stats(location : str):
     """
         Collects the dimensions of the image into a pandas.DataFrame
@@ -103,15 +116,17 @@ def save_bounding_box(image : np.ndarray,
 def draw_bounding_box(image : np.ndarray, 
                       label_polygon : list,
                       output_polygon : list = None,
+                      draw_tiles : bool = False,
                       tile_num_x = 16,
                       tile_num_y = 16):
-    _draw_bounding_box(image, label_polygon, output_polygon, tile_num_x, tile_num_y)
+    _draw_bounding_box(image, label_polygon, output_polygon, draw_tiles, tile_num_x, tile_num_y)
     plt.show()
 
 
 def _draw_bounding_box(image : np.ndarray, 
                       label_polygon : list,
                       output_polygon : list = None,
+                      draw_tiles : bool = False,
                       tile_num_x = 16,
                       tile_num_y = 16):
     """
@@ -138,18 +153,16 @@ def _draw_bounding_box(image : np.ndarray,
     for one_label in label_polygon:
         # rectangle expects height and width and not 2nd coordinates as the 2nd vertice of the bounding box
         ax.add_patch(patches.Rectangle( 
-            (one_label[0], one_label[1]),
-            one_label[2] - one_label[0],
-            one_label[3] - one_label[1],
+            (one_label[0][0], one_label[0][1]),
+            one_label[1][0], one_label[1][1],
             fill=False, linewidth=1, color='tab:green'))
 
     if output_polygon is not None:
         for one_output_polygon in output_polygon:
             ax.add_patch(patches.Rectangle( 
-                (one_output_polygon[0], one_output_polygon[1]),
-                one_output_polygon[2] - one_output_polygon[0],
-                one_output_polygon[3] - one_output_polygon[1],
-                fill=False, linewidth=1, color='tab:green'))
+                (one_output_polygon[0][0], one_output_polygon[0][1]),
+                one_output_polygon[1][0], one_output_polygon[1][1],
+                fill=False, linewidth=1, color='tab:blue'))
 
     plt.show()
 
@@ -216,8 +229,7 @@ def draw_float_bounding_box(image : np.ndarray,
 
         ax.add_patch(patches.Rectangle( 
             (output[0][0], output[0][1]),
-            output[1][0] - output[0][0],
-            output[1][1] - output[0][1],
+            output[1][0], output[1][1],
             fill=True, linewidth=1, color='tab:green', alpha=0.5))
 
     if output_polygon is not None:
@@ -231,8 +243,7 @@ def draw_float_bounding_box(image : np.ndarray,
 
             ax.add_patch(patches.Rectangle( 
                 (output[0][0], output[0][1]),
-                output[1][0] - output[0][0],
-                output[1][1] - output[0][1],
+                output[1][0], output[1][1],
                 fill=True, linewidth=1, color='tab:blue', alpha=0.5))
 
     ax.imshow(image, cmap='gray')

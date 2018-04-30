@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 from inspect_images import *
 from nn import *
 from tensorflow.python import debug as tf_debug
+import configparser
+from yolo import Yolo
 
 
 def doit():
@@ -54,7 +56,15 @@ print("Result: %s, %s, %s" % (pic,label,origlabel))
 draw_bounding_box(pic, label)
 """
 
+config = configparser.ConfigParser()
+config.read('config.cfg')
+
+yolo = Yolo(config['common params'], config['net params'])
+yolo.train_on_lots_of_pics('asd')
+
+"""
 #train_on_one_pic("./samples/pic107.jpg")
 train_on_lots_of_pics("dataset256_tiles.tfrecord", train_on_tiles = False, use_dataset = False)
+"""
 
 
