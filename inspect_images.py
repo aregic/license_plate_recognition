@@ -8,18 +8,78 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from tiling import TileCounter
+from functools import reduce
 
 
+def filter_result(result, alpha):
+    res = []
 
-class BoundingBox():
-    def __init__(self, x, y, w, h):
-        self.x = x
-        self.y = y
-        self.w = w
-        self.h = h
+    for i in range(np.shape(result)[0]):
+        for j in range(np.shape(result)[1]):
+            if result[i,j,4] > alpha:
+                res.append(result[i,j])
 
-    def getMidPoint(self):
-        return self.x + (self.w/2), self.y + (self.h/2)
+    return res
+
+
+def find_max(labels, pos):
+    def get_bigger(x, y):
+        if x[pos] > y[pos]:
+            return x
+        else:
+            return y
+
+    min_value = 1000
+    res = list(np.zeros(np.shape(labels)[1]) - min_value)
+    return reduce(get_bigger, labels, res)
+
+
+def intersection_over_union(label1, label2):
+    label1_minx = label1[0]
+    label1_miny = label1[1]
+    label1_maxx = label1[0] + label1[2]
+    label1_maxy = label1[1] + label1[3]
+
+    label2_minx = label2[0]
+    label2_miny = label2[1]
+    label2_maxx = label2[0] + label2[2]
+    label2_maxy = label2[1] + label2[3]
+
+    x1 = max(label1_minx, label2_minx)
+    x2 = min(label1_maxx, label2_maxx)
+    y1 = max(label1_miny, label2_miny)
+    y2 = min(label1_maxy, label2_maxy)
+
+    intersect = max((x2-x1),0) * max((y2-y1), 0)
+
+    union = ((label1_maxx - label1_minx) * (label1_maxy - label1_miny)
+            + (label2_maxx - label2_minx) * (label2_maxy - label2_miny)
+            - intersect)
+
+    return intersect / (union + 1e-6) #, intersect, union
+
+
+def non_max_supp(labels):
+    """
+        Labels: [x, y, w, h, confidence]
+    """
+    open_set = list(map(list, np.copy(labels)))
+    res = []
+
+    while(len(open_set) > 0):
+        max_label = list(find_max(open_set, 4))
+        print("Checking label: %s" % max_label)
+        res.append(max_label)
+        print("Result so far: %s" % res)
+        print("Open set: %s" % open_set)
+        open_set.remove(max_label)
+
+        head, *_ = open_set
+        if intersection_over_union(max_label, head) > 0.5:
+            open_set.remove(head)
+
+    return res
+
 
 
 def get_image_stats(location : str):

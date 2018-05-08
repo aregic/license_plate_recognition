@@ -22,8 +22,10 @@ class Yolo:
         self.detailed_log = bool(common_params.get('detailed_log', True))
         self.checkpoint_dir = str(common_params['checkpoint dir'])
         self.log_dir = str(common_params['log dir'])
-        self.max_steps = str(common_params['max steps'])
-        self.log_frequency = str(common_params['log frequency'])
+        self.max_steps = int(common_params['max steps'])
+        self.save_frequency = int(common_params['save frequency'])
+        self.log_frequency = int(common_params['log frequency'])
+        self.max_number_of_boxes_per_image = int(common_params.get('max number of boxes per image', 5))
 
         self.num_of_preprocess_threads = int(common_params.get('number of preprocessor threads', 8))
 
@@ -31,8 +33,12 @@ class Yolo:
         self.epoch_per_decay = int(common_params.get('epochs per decay', 100))
         self.initial_learning_rate = float(net_params.get('initial learning rate', 1e-5))
         self.learning_decay = float(net_params.get('learning decay', 1))
+        self.momentum = float(net_params.get('learning momentum'))
 
-        self.preprocessor = Preprocessor(self.image_size, self.image_size, self.cell_size, self.cell_size)
+        self.preprocessor = Preprocessor(
+                self.image_size,
+                self.image_size,
+                self.max_number_of_boxes_per_image)
 
         if not test:
             self.object_scale = float(net_params['object_scale'])
@@ -49,7 +55,9 @@ class Yolo:
         basic_kernels = np.swapaxes(basic_kernels, 1,3)
 
         layer1 = create_layer(image, [7,7,1,32], 0.0, 5e-2, "conv1", const_init = basic_kernels)
+        # layer1 = create_layer(image, [3,3,1,32], 0.0, 5e-2, "conv1")
 
+        """
         if self.detailed_log:
             images = layer1[0]
             images = tf.transpose(layer1[0, 0:, 0:], [2,0,1])
@@ -57,30 +65,30 @@ class Yolo:
                 "Layer 1", 
                 tf.reshape(images, [32,self.image_size,self.image_size,1]),
                 max_outputs = 32)
+        """
 
-        pool1 = tf.nn.max_pool(layer1, ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME', name="pool1")
-        norm1 = tf.nn.lrn(pool1, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm1")
-        layer2 = create_layer(norm1, [3,3,32,32], 0.1, 5e-2, "conv2", dropout_rate=0.8)
-        pool2 = tf.nn.max_pool(layer2, ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME', name="pool2")
+        #pool1 = tf.nn.max_pool(layer1, ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME', name="pool1")
+        norm1 = tf.nn.lrn(layer1, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm1")
+        layer2 = create_layer(norm1, [3,3,32,32], 0.1, 5e-2, "conv2", dropout_rate=0.5)
+        pool2 = tf.nn.max_pool(layer2, ksize=[1,3,3,1], strides=[1,3,3,1], padding='SAME', name="pool2")
         norm2 = tf.nn.lrn(pool2, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm2")
          
-        layer3 = create_layer(norm2, [1,1,32,32], 0.1, 5e-2, "conv3", dropout_rate=0.8)
-        pool3 = tf.nn.max_pool(layer3, ksize=[1,3,3,1], strides=[1,2,2,1], padding='SAME', name="pool3")
+        layer3 = create_layer(norm2, [3,3,32,32], 0.1, 5e-2, "conv3", dropout_rate=0.5)
+        pool3 = tf.nn.max_pool(layer3, ksize=[1,3,3,1], strides=[1,3,3,1], padding='SAME', name="pool3")
         norm3 = tf.nn.lrn(pool3, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm3")
 
-        layer4 = create_layer(norm3, [3,3,32,64], 0.1, 5e-2, "conv4", dropout_rate=0.8)
+        layer4 = create_layer(norm3, [3,3,32,32], 0.1, 5e-2, "conv4", dropout_rate=0.5)
         norm4 = tf.nn.lrn(layer4, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm4")
-
-        layer5 = create_layer(norm4, [1,1,64,64], 0.1, 3e-2, "conv5", dropout_rate=0.5)
+        layer5 = create_layer(norm4, [1,1,32,32], 0.1, 3e-2, "conv5", dropout_rate=0.5)
         norm5 = tf.nn.lrn(layer5, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm5")
-        layer6 = create_layer(norm5, [3,3,64,32], 0.1, 2e-2, "conv6", dropout_rate=0.5)
-        pool6 = tf.nn.max_pool(layer6, ksize=[1,3,3,1], strides=[1,2,2,1], padding='SAME', name="pool6")
+        """
+        layer6 = create_layer(norm5, [3,3,32,64], 0.1, 2e-2, "conv6", dropout_rate=0.5)
+        pool6 = tf.nn.max_pool(layer6, ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME', name="pool6")
         norm6 = tf.nn.lrn(pool6, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm6")
 
-        """
-        layer7 = create_layer(norm6, [1,1,128,128], 0.1, 1e-3, "conv7", dropout_rate=0.5)
+        layer7 = create_layer(norm6, [1,1,128,64], 0.1, 1e-3, "conv7", dropout_rate=0.5)
         norm7 = tf.nn.lrn(layer7, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm7")
-        layer8 = create_layer(norm7, [3,3,128,256], 0.1, 2e-3, "conv8", dropout_rate=0.5)
+        layer8 = create_layer(norm7, [3,3,64,32], 0.1, 2e-3, "conv8", dropout_rate=0.5)
         norm8 = tf.nn.lrn(layer8, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm8")
         layer9 = create_layer(norm8, [3,3,256,512], 0.1, 3e-3, "conv9", dropout_rate=0.5)
         norm10 = tf.nn.lrn(layer9, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name="norm6")
@@ -88,16 +96,17 @@ class Yolo:
 
         with tf.variable_scope('local3') as scope:
             # Move everything into depth so we can perform a single matrix multiply.
-            reshape = tf.reshape(norm6, [self.batch_size, -1])
+            reshape = tf.reshape(norm5, [self.batch_size, -1])
             dim = reshape.get_shape()[1].value
-            weights = _normal_variable_with_weight_decay('weights', shape=[dim, 384],
+            weights = _normal_variable_with_weight_decay('weights', shape=[dim, 192],
                                               stddev=0.04, wd=0.004)
-            biases = _variable_on_cpu('biases', [384], tf.constant_initializer(0.1))
+            biases = _variable_on_cpu('biases', [192], tf.constant_initializer(0.1))
             #local3 = tf.nn.relu(tf.matmul(reshape, weights) + biases, name=scope.name)
             pre_act3 = tf.matmul(reshape, weights) + biases
             local3 = leakyRelu(pre_act3)
             dropped_local3 = tf.nn.dropout(local3, 0.5)
      
+        """
         # local4
         with tf.variable_scope('local4') as scope:
             weights = _normal_variable_with_weight_decay('weights', shape=[384, 192],
@@ -107,13 +116,14 @@ class Yolo:
             pre_act4 = tf.matmul(dropped_local3, weights) + biases
             local4 = leakyRelu(pre_act4)
             dropped_local4 = tf.nn.dropout(local4, 0.8)
+        """
 
         with tf.variable_scope('tile_output_layer') as scope:
             tile_weights = _normal_variable_with_weight_decay('weights', [192, self.cell_size * self.cell_size * 6],
                                                   stddev=1/192.0, wd=0.0)
             tile_biases = _variable_on_cpu('biases', [self.cell_size * self.cell_size * 6],
                                       tf.constant_initializer(0.0))
-            tile_softmax_linear = tf.add(tf.matmul(dropped_local4, tile_weights), tile_biases, name=scope.name)
+            tile_softmax_linear = tf.add(tf.matmul(dropped_local3, tile_weights), tile_biases, name=scope.name)
             tile_dropped_softmax = tf.nn.dropout(tile_softmax_linear, 0.9)
 
             tile_result = tf.reshape(
@@ -134,8 +144,9 @@ class Yolo:
                                         staircase=True)
         tf.summary.scalar('learning_rate', lr)
 
-        #opt = tf.train.GradientDescentOptimizer(lr)
-        opt = tf.train.AdamOptimizer(lr)
+        opt = tf.train.GradientDescentOptimizer(lr)
+        #opt = tf.train.AdamOptimizer(lr)
+        #opt = tf.train.MomentumOptimizer(lr, self.momentum)
         grads = opt.compute_gradients(total_loss)
 
         apply_gradient_op = opt.apply_gradients(grads, global_step=global_step)
@@ -152,6 +163,161 @@ class Yolo:
             train_op = tf.no_op(name='train')
 
         return train_op
+
+
+    def get_inference_result(self, dataset_file : dir, train_on_tiles = False, use_dataset = False):
+        """
+            Leave train on tiles on False for now.
+        """
+        tf.reset_default_graph()
+        with tf.Graph().as_default():
+            #global_step = tf.contrib.framework.get_or_create_global_step()
+            global_step_tensor = tf.Variable(1, trainable=False, name='global_step')
+
+            if use_dataset:
+                pic_batch, label_batch = readFromDataSet(dataset_file, train_on_tiles)
+            else:
+                pic_batch, label_batch, enqueue_op, enq_image, enq_label, examples_in_queue = readOnTheFly()
+
+            #logits, tiles = self.inference(pic_batch)
+            logits = self.inference(pic_batch)
+
+            if train_on_tiles:
+                # if dataset is created with train_on_tiles is True, label_batch will actually
+                # contain the tile matrix...
+                # TODO fix this
+                if self.detailed_log:
+                    tf.summary.image(
+                            "tile label",
+                            tf.reshape(label_batch, [self.batch_size, self.cell_size, self.cell_size, 1]))
+                    alpha_cut = np.full([self.batch_size, self.cell_size, self.cell_size], ALPHA_CUT, dtype=np.float32)
+                    tf.summary.image(
+                            "tile output",
+                            tf.cast(
+                                tf.reshape(tf.greater_equal(tiles, tf.convert_to_tensor(alpha_cut)),
+                                    [self.batch_size, self.cell_size, self.cell_size, 1]),
+                                dtype=tf.float32))
+
+                loss, _ = self.loss(tiles,label_batch)
+                train_op = self.train(loss, global_step)
+
+            else:
+                """
+                label_batch_filtered = tf.boolean_mask(
+                        label_batch,
+                        tf.cast(label_batch[:,:,4], dtype=tf.bool))
+                label_batch_filtered = tf.Print(label_batch_filtered, [label_batch_filtered], "\n\nLABEL BATCH FILTERED: ", summarize=250)
+                label_batch_filtered = tf.Print(label_batch_filtered, [label_batch], "\n\nLABEL BATCH: ", summarize=250)
+                """
+                number_of_boxes = tf.cast(tf.count_nonzero(label_batch[:,:,4], 1), dtype=tf.int32)
+                #number_of_boxes = tf.Print(number_of_boxes, [number_of_boxes], "\n\nNumber of boxes: ", 
+                #        summarize=10)
+                loss, _ = self.loss(logits,label_batch, number_of_boxes)
+                train_op = self.train(loss, global_step)
+
+            coord = tf.train.Coordinator()
+
+            if not use_dataset:
+                samples_iter = get_samples()
+
+            with tf.Session().as_default() as sess:
+                sess.run(tf.local_variables_initializer())
+                sess.run(tf.global_variables_initializer())
+                tf.train.global_step(sess, global_step_tensor)
+
+                if not use_dataset:
+                    threads = []
+                    for i in range(self.num_of_preprocess_threads):
+                        
+                        #print("Creating thread %i" % i)
+                        t = threading.Thread(target=load_preproc_enqueue_thread, args=(
+                            sess, coord, enqueue_op, enq_image, enq_label, samples_iter
+                        ))
+
+                        t.setDaemon(True)
+                        t.start()
+                        threads.append(t)
+                        coord.register_thread(t)
+                        time.sleep(0.5)
+
+                    num_examples_in_queue = sess.run(examples_in_queue)
+                    while num_examples_in_queue < MIN_QUEUE_EXAMPLES:
+                        num_examples_in_queue = sess.run(examples_in_queue)
+                        for t in threads:
+                            if not t.isAlive():
+                                coord.request_stop()
+                                raise ValueError("One or more enqueuing threads crashed...")
+                        time.sleep(0.1)
+
+                    print("# of examples in queue: %i" % num_examples_in_queue)
+
+                # Create a coordinator and run all QueueRunner objects
+                coord = tf.train.Coordinator()
+                threads = tf.train.start_queue_runners(coord=coord)
+
+                last_time = time.time()
+                saver = tf.train.Saver()
+                #saver = tf.train.import_meta_graph(join(self..checkpoint_dir, "my_model.meta"))
+                checkpoint_file = join(self.checkpoint_dir, "my_model")
+                if isfile(join(self.checkpoint_dir, "checkpoint")):
+                    #saver.restore(sess,tf.train.latest_checkpoint(self.checkpoint_dir))
+                    optimistic_restore(sess, checkpoint_file)
+                    initialize_uninitialized_vars(sess)
+                    print("Model loaded.")
+
+                sum_writer = tf.summary.FileWriter(self.log_dir, graph=tf.get_default_graph())
+                merged = tf.summary.merge_all()
+                """
+                for i in range(self.max_steps):
+                    if (i % self.save_frequency) != 0 or i == 0:
+                        if (i % self.log_frequency) != 0:
+                            sess.run([loss, train_op])
+                        else:
+                            if train_on_tiles:
+                                loss_value, res_tiles, res_label_tiles, _ = (
+                                        sess.run([loss, tiles, label_batch, train_op]))
+                                tilenum = np.count_nonzero(res_label_tiles)
+                                positive_tiles = getPositiveTiles(res_tiles, ALPHA_CUT)
+                                missed = np.count_nonzero(res_label_tiles - positive_tiles)
+                                act_time = time.time()
+                                exec_time = act_time - last_time
+                                samples_per_sec = self.batch_size * self.log_frequency / exec_time
+                                print("Step %i, loss: %f, execution time: %.4f, samples/second: %.4f" 
+                                        % (i, loss_value, exec_time, samples_per_sec) )
+                                print("Tiles in label: %i, tile in output: %i, missed: %i" % 
+                                        (tilenum, np.count_nonzero(positive_tiles), missed))
+                            else:
+                                loss_value, _ = sess.run([loss, train_op])
+                                act_time = time.time()
+                                exec_time = act_time - last_time
+                                samples_per_sec = self.batch_size * self.log_frequency / exec_time
+                                print("Step %i, loss: %f, execution time: %.4f, samples/second: %.4f" 
+                                        % (i, loss_value, exec_time, samples_per_sec) )
+     
+                            last_time = time.time()
+                    else:
+                        sys.stdout.write("Saving model... ")
+                        sys.stdout.flush()
+                        summary, loss_value, _ = sess.run([merged, loss, train_op])
+                        sum_writer.add_summary(summary, i)
+                        saver.save(sess, join(self.checkpoint_dir, "my_model"))
+                        print("saved.")
+                        if (i % self.log_frequency) == 0:
+                            act_time = time.time()
+                            exec_time = act_time - last_time
+                            samples_per_sec = self.batch_size * self.log_frequency / exec_time
+                            print("Step %i, loss: %f, execution time: %.4f, samples/second: %.4f" 
+                                    % (i, loss_value, exec_time, samples_per_sec) )
+                            last_time = time.time()
+                """
+                #loss_result, tiles_result, label_result, pic_result_ = (
+                return sess.run([loss, logits, label_batch, pic_batch, train_op])
+
+
+                coord.request_stop()
+                coord.join(threads)
+
+
 
 
     def train_on_lots_of_pics(self, dataset_file : dir, train_on_tiles = False, use_dataset = False):
@@ -186,12 +352,22 @@ class Yolo:
                                     [self.batch_size, self.cell_size, self.cell_size, 1]),
                                 dtype=tf.float32))
 
-                loss = self.loss(tiles,label_batch)
+                loss, _ = self.loss(tiles,label_batch)
                 train_op = self.train(loss, global_step)
 
             else:
-                loss = self.loss(logits,label_batch, label_batch.get_shape())
-                train_op = train(loss, global_step)
+                """
+                label_batch_filtered = tf.boolean_mask(
+                        label_batch,
+                        tf.cast(label_batch[:,:,4], dtype=tf.bool))
+                label_batch_filtered = tf.Print(label_batch_filtered, [label_batch_filtered], "\n\nLABEL BATCH FILTERED: ", summarize=250)
+                label_batch_filtered = tf.Print(label_batch_filtered, [label_batch], "\n\nLABEL BATCH: ", summarize=250)
+                """
+                number_of_boxes = tf.cast(tf.count_nonzero(label_batch[:,:,4], 1), dtype=tf.int32)
+                #number_of_boxes = tf.Print(number_of_boxes, [number_of_boxes], "\n\nNumber of boxes: ", 
+                #        summarize=10)
+                loss, _ = self.loss(logits,label_batch, number_of_boxes)
+                train_op = self.train(loss, global_step)
 
             coord = tf.train.Coordinator()
 
@@ -250,7 +426,8 @@ class Yolo:
                             sess.run([loss, train_op])
                         else:
                             if train_on_tiles:
-                                loss_value, res_tiles, res_label_tiles, _ = sess.run([loss, tiles, label_batch, train_op])
+                                loss_value, res_tiles, res_label_tiles, _ = (
+                                        sess.run([loss, tiles, label_batch, train_op]))
                                 tilenum = np.count_nonzero(res_label_tiles)
                                 positive_tiles = getPositiveTiles(res_tiles, ALPHA_CUT)
                                 missed = np.count_nonzero(res_label_tiles - positive_tiles)
@@ -299,10 +476,10 @@ class Yolo:
             Return:
               iou: 3-D tensor [CELL_SIZE, CELL_SIZE, BOXES_PER_CELL]
         """
-        boxes1 = tf.pack([boxes1[:, :, :, 0] - boxes1[:, :, :, 2] / 2, boxes1[:, :, :, 1] - boxes1[:, :, :, 3] / 2,
+        boxes1 = tf.stack([boxes1[:, :, :, 0] - boxes1[:, :, :, 2] / 2, boxes1[:, :, :, 1] - boxes1[:, :, :, 3] / 2,
                           boxes1[:, :, :, 0] + boxes1[:, :, :, 2] / 2, boxes1[:, :, :, 1] + boxes1[:, :, :, 3] / 2])
         boxes1 = tf.transpose(boxes1, [1, 2, 3, 0])
-        boxes2 =  tf.pack([boxes2[0] - boxes2[2] / 2, boxes2[1] - boxes2[3] / 2,
+        boxes2 =  tf.stack([boxes2[0] - boxes2[2] / 2, boxes2[1] - boxes2[3] / 2,
                           boxes2[0] + boxes2[2] / 2, boxes2[1] + boxes2[3] / 2])
 
         #calculate the left up point
@@ -331,35 +508,43 @@ class Yolo:
                 predict: 3-D tensor [cell_size, cell_size, 5 * boxes_per_cell]
                 labels : [max_objects, 5]  (x_center, y_center, w, h, class)
         """
-        label = labels[num:num+1, :]
+        filtered_labels = tf.boolean_mask(labels, tf.cast(labels[:,4], dtype=tf.bool))
+        label = filtered_labels[num:num+1, :]
         label = tf.reshape(label, [-1])
+        
+        #label = tf.Print(label, [label], "\n\nLABEL: ", summarize=5)
+
 
         #calculate objects  tensor [CELL_SIZE, CELL_SIZE]
-        min_x = (label[0] - label[2] / 2) / (self.image_size / self.cell_size)
-        max_x = (label[0] + label[2] / 2) / (self.image_size / self.cell_size)
+        min_x = (label[0] - (label[2] / 2)) * self.cell_size
+        max_x = (label[0] + (label[2] / 2)) * self.cell_size
 
-        min_y = (label[1] - label[3] / 2) / (self.image_size / self.cell_size)
-        max_y = (label[1] + label[3] / 2) / (self.image_size / self.cell_size)
+        min_y = (label[1] - (label[3] / 2)) * self.cell_size
+        max_y = (label[1] + (label[3] / 2)) * self.cell_size
 
-        min_x = tf.floor(min_x)
-        min_y = tf.floor(min_y)
+        # due to normalization and rouding error the bounding box can slightly leave the picture...
+        min_x = tf.clip_by_value(tf.floor(min_x), 0, self.cell_size-1)
+        min_y = tf.clip_by_value(tf.floor(min_y), 0, self.cell_size-1)
 
-        max_x = tf.ceil(max_x)
-        max_y = tf.ceil(max_y)
+        max_x = tf.clip_by_value(tf.ceil(max_x), 0, self.cell_size-1)
+        max_y = tf.clip_by_value(tf.ceil(max_y), 0, self.cell_size-1)
 
         temp = tf.cast(tf.stack([max_y - min_y, max_x - min_x]), dtype=tf.int32)
+        #temp = tf.Print(temp, [min_x, min_y, max_x, max_y], "\n\nMaximums: ", summarize=4)
         objects = tf.ones(temp, tf.float32)
 
+
         temp = tf.cast(tf.stack([min_y, self.cell_size - max_y, min_x, self.cell_size - max_x]), tf.int32)
+        #temp = tf.Print(temp, [temp], "\n\nPadding for objects: ", summarize=4)
         temp = tf.reshape(temp, (2, 2))
         objects = tf.pad(objects, temp, "CONSTANT")
 
         #calculate objects  tensor [CELL_SIZE, CELL_SIZE]
         #calculate responsible tensor [CELL_SIZE, CELL_SIZE]
-        center_x = label[0] / (self.image_size / self.cell_size)
+        center_x = label[0] * self.cell_size
         center_x = tf.floor(center_x)
 
-        center_y = label[1] / (self.image_size / self.cell_size)
+        center_y = label[1] * self.cell_size
         center_y = tf.floor(center_y)
 
         response = tf.ones([1, 1], tf.float32)
@@ -374,15 +559,16 @@ class Yolo:
         
 
         predict_boxes = tf.reshape(predict_boxes, [self.cell_size, self.cell_size, self.boxes_per_cell, 4])
-        predict_boxes = predict_boxes * [self.image_size / self.cell_size, self.image_size / self.cell_size, self.image_size, self.image_size]
+        predict_boxes = predict_boxes * [1 / self.cell_size, 1 / self.cell_size, 1, 1]
 
         base_boxes = np.zeros([self.cell_size, self.cell_size, 4])
 
         for y in range(self.cell_size):
           for x in range(self.cell_size):
             #nilboy
-            base_boxes[y, x, :] = [self.image_size / self.cell_size * x, self.image_size / self.cell_size * y, 0, 0]
-        base_boxes = np.tile(np.resize(base_boxes, [self.cell_size, self.cell_size, 1, 4]), [1, 1, self.boxes_per_cell, 1])
+            base_boxes[y, x, :] = [1 / self.cell_size * x, 1 / self.cell_size * y, 0, 0]
+        base_boxes = np.tile(
+                np.resize(base_boxes, [self.cell_size, self.cell_size, 1, 4]), [1, 1, self.boxes_per_cell, 1])
 
         predict_boxes = base_boxes + predict_boxes
 
@@ -422,7 +608,8 @@ class Yolo:
         #calculate predict p_P 3-D tensor [CELL_SIZE, CELL_SIZE, NUM_CLASSES]
         p_P = predict[:, :, 0:self.num_classes]
 
-        class_loss = tf.nn.l2_loss(tf.reshape(objects, (self.cell_size, self.cell_size, 1)) * (p_P - P)) * self.class_scale
+        class_loss = tf.nn.l2_loss(tf.reshape(objects, (self.cell_size, self.cell_size, 1)) 
+                                    * (p_P - P)) * self.class_scale
 
         object_loss = tf.nn.l2_loss(I * (p_C - C)) * self.object_scale
 
@@ -460,7 +647,7 @@ class Yolo:
             predict = predicts[i, :, :, :]
             label = labels[i, :, :]
             object_num = objects_num[i]
-            nilboy = tf.ones([7,7,2])
+            nilboy = tf.ones([self.cell_size,self.cell_size,1])
             tuple_results = tf.while_loop(cond1, self.body1, 
                     [
                         tf.constant(0), object_num, [class_loss, object_loss, noobject_loss, coord_loss],
@@ -472,11 +659,11 @@ class Yolo:
 
         tf.add_to_collection('losses', (loss[0] + loss[1] + loss[2] + loss[3])/self.batch_size)
 
-        tf.scalar_summary('class_loss', loss[0]/self.batch_size)
-        tf.scalar_summary('object_loss', loss[1]/self.batch_size)
-        tf.scalar_summary('noobject_loss', loss[2]/self.batch_size)
-        tf.scalar_summary('coord_loss', loss[3]/self.batch_size)
-        tf.scalar_summary('weight_loss', tf.add_n(tf.get_collection('losses')) - (loss[0] + loss[1] + loss[2] + loss[3])/self.batch_size )
+        tf.summary.scalar('class_loss', loss[0]/self.batch_size)
+        tf.summary.scalar('object_loss', loss[1]/self.batch_size)
+        tf.summary.scalar('noobject_loss', loss[2]/self.batch_size)
+        tf.summary.scalar('coord_loss', loss[3]/self.batch_size)
+        tf.summary.scalar('weight_loss', tf.add_n(tf.get_collection('losses')) - (loss[0] + loss[1] + loss[2] + loss[3])/self.batch_size )
 
         return tf.add_n(tf.get_collection('losses'), name='total_loss'), nilboy
 
@@ -538,7 +725,8 @@ def _variable_on_cpu(name, shape, initializer):
   Returns:
     Variable Tensor
   """
-  with tf.device('/cpu:0'):
+  #with tf.device('/cpu:0'):
+  with tf.device('/gpu:0'):
     dtype = tf.float16 if FLAGS.use_fp16 else tf.float32
     var = tf.get_variable(name, shape, initializer=initializer, dtype=dtype)
   return var

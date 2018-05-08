@@ -42,8 +42,8 @@ if "batch_size" not in tf.app.flags.FLAGS.__flags.keys():
 #SIZE_Y = 512
 
 # number of tiles for the YOLO architecture
-TILE_NUMBER_X = 9
-TILE_NUMBER_Y = 13
+TILE_NUMBER_X = 5
+TILE_NUMBER_Y = 5
 
 # sizes must be multiples of the respective TILE_NUMBER_[X|Y]s!
 SIZE_X = 512 # tried: 256
@@ -174,7 +174,7 @@ def eval_on_pic(picloc : dir):
         fullpicloc = picloc
         
         image = scipy.ndimage.imread(fullpicloc, mode="L")
-        label = get_bounding_box(fullpicloc)
+        label = get_bounding_polygon(fullpicloc)
 
         image, label = preprocessor.preprocess(image, label)
         float_image = tf.image.convert_image_dtype(image, dtype=tf.float32)
@@ -239,7 +239,7 @@ def threadsafe_generator(f):
 
 @threadsafe_generator
 def get_samples():
-    preprocessor = Preprocessor(SIZE_X, SIZE_Y)
+    preprocessor = Preprocessor(SIZE_X, SIZE_Y, MAX_NUMBER_OF_LABELS)
     pics = get_image_list(FLAGS.data_dir)
     images, labels = (0,0)
 
@@ -260,9 +260,21 @@ def get_samples():
 
         # despite the name, this one works for bounding boxes too.
         # TODO: fix this
-        label = get_bounding_polygon(fullpicloc)
+        labels = get_bounding_polygon(fullpicloc)
+        midpoint_labels = []
+        for l in labels:
+            boundingBox = BoundingBox(*np.reshape(l, [4]))
+            midpoint_labels.append(boundingBox.getMidPointRepr())
         
-        pic,label = preprocessor.preprocess(pic, label)
+        pic,label = preprocessor.preprocess(pic, midpoint_labels)
+        """
+        try:
+            pic,label = preprocessor.preprocess(pic, midpoint_labels)
+        except AssertionError as error:
+            print("Assertion error while processing picture %s" % picloc)
+            print("Error: %s" % error)
+            exit(-1)
+        """
 
         samples.append({ "pic" : pic, "label" : label})
 
@@ -333,13 +345,13 @@ def optimistic_restore(session, save_file):
 
 def readOnTheFly():
     enq_image = tf.placeholder(tf.float32, shape=[SIZE_X, SIZE_Y, 1])
-    enq_label = tf.placeholder(tf.float32, shape=[MAX_NUMBER_OF_LABELS, 2, 2])
+    enq_label = tf.placeholder(tf.float32, shape=[MAX_NUMBER_OF_LABELS, 5])
 
     q = tf.RandomShuffleQueue(
         capacity=MIN_QUEUE_EXAMPLES + (NUM_PREPROCESS_THREADS) * FLAGS.batch_size,
         min_after_dequeue=MIN_QUEUE_EXAMPLES + FLAGS.batch_size,
         dtypes=[tf.float32, tf.float32],
-        shapes=[[SIZE_X, SIZE_Y, 1], [MAX_NUMBER_OF_LABELS, 2, 2]]
+        shapes=[[SIZE_X, SIZE_Y, 1], [MAX_NUMBER_OF_LABELS, 5]]
     )
 
     enqueue_op = q.enqueue([enq_image, enq_label])

@@ -66,8 +66,7 @@ def orthonormalInit(kernel_shape : np.ndarray):
             kernel_shape: expected to be [d1, d2, d3, d4], where kernel size is d1*d2, d3 is the input
                 channel size (ignored here), and d4 is the number of neurons (kernels) inside the layer.
     """
-    vector_length = kernel_shape[0] * kernel_shape[1]
-    random_matrix = np.random.rand(kernel_shape[3], kernel_shape[0] * kernel_shape[1] * kernel_shape[2]) 
+    random_matrix = np.random.rand(kernel_shape[2], kernel_shape[0] * kernel_shape[1] * kernel_shape[3]) 
     u,_,vt = np.linalg.svd(random_matrix, full_matrices=False)
     print("svd finished, vt shape: %s" % str(np.shape(vt)))
     w = np.reshape(vt.T, [kernel_shape[0], kernel_shape[1], kernel_shape[2], kernel_shape[3]])

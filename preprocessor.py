@@ -9,7 +9,6 @@ from tiling import TileCounter
 
 RANDOM_SEED = 2343298
 TRAINING_SET_RATIO = 2
-MAX_NUMBER_OF_LABELS = 5
 
 
 class BoundingBox():
@@ -22,14 +21,15 @@ class BoundingBox():
     def getMidPoint(self):
         return self.x + (self.w/2), self.y + (self.h/2)
 
+    def getMidPointRepr(self):
+        return [self.x + (self.w/2), self.y + (self.h/2), self.w, self.h]
+
 
 class Preprocessor():
-    def __init__(self, size_x, size_y, tile_num_x, tile_num_y):
+    def __init__(self, size_x, size_y, max_number_of_labels):
         self.size_x = size_x
         self.size_y = size_y
-        self.tile_num_x = tile_num_x
-        self.tile_num_y = tile_num_y
-        self.tileCounter = TileCounter(tile_num_x, tile_num_y, 1, 1)
+        self.max_number_of_labels = max_number_of_labels
 
 
     def preprocess(self, image : np.ndarray, labels : np.ndarray, train_on_tiles = False): 
@@ -43,27 +43,28 @@ class Preprocessor():
         scaled_labels = []
         for label in labels:
             scaled_label = self.resize_label(label, im_shape[1], im_shape[0])
-            scaled_label.append(1)
+            #assert ((scaled_label[0] + scaled_label[2] <= 1) and (scaled_label[1] + scaled_label[3] <= 1)), \
+            #    "Error. Original label: %s, converted: %s" % (str(label), str(scaled_label))
+            scaled_label = np.append(scaled_label, 1)
             #scaled_label.insert(0, 1)
             scaled_labels.append(np.asarray(scaled_label, dtype=np.float32))
 
-        """
-        while len(scaled_labels) < MAX_NUMBER_OF_LABELS:
-            scaled_labels.append(np.array([-1, -1, -1, -1, 0]).astype("float32"))
+        while len(scaled_labels) < self.max_number_of_labels:
+            scaled_labels.append(np.array([0, 0, 0, 0, 0]).astype("float32"))
 
-        while len(scaled_labels) > MAX_NUMBER_OF_LABELS:
+        while len(scaled_labels) > self.max_number_of_labels:
             del scaled_labels[-1]
-        """
 
         if train_on_tiles:
             #print("Shape of scaled_labels: %s" % str(np.shape(scaled_labels)))
             #print("Scaled labels: %s" % scaled_labels)
             # TODO reshape should not be needed here
-            tiles = tileCounter.getTilesAsMatrix(np.reshape(scaled_labels, (4, 4)))
+            tiles = self.tileCounter.getTilesAsMatrix(np.reshape(scaled_labels, (4, 4)))
 
             return image.astype("float32"), np.asarray(tiles).astype("float32")
 
         else:   # ok the else is not really needed...
+            #print("scaled labels: %s" % str(scaled_labels))
             return image.astype("float32"), scaled_labels
 
 
@@ -88,9 +89,9 @@ class Preprocessor():
     def resize_label(self, label : np.ndarray, width : int, height : int):
         newlabel = np.reshape(label.copy(), [4])
         for i in range(0,4,2):
-            newlabel[i] = int(newlabel[i] * self.size_x/float(width))
+            newlabel[i] = newlabel[i] / float(width)
         for i in range(1,4,2):
-            newlabel[i] = int(newlabel[i] * self.size_y/float(height))
+            newlabel[i] = newlabel[i] / float(height)
 
         return newlabel
 
