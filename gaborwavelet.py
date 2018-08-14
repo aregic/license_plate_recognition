@@ -66,10 +66,16 @@ def orthonormalInit(kernel_shape : np.ndarray):
             kernel_shape: expected to be [d1, d2, d3, d4], where kernel size is d1*d2, d3 is the input
                 channel size (ignored here), and d4 is the number of neurons (kernels) inside the layer.
     """
-    random_matrix = np.random.rand(kernel_shape[2], kernel_shape[0] * kernel_shape[1] * kernel_shape[3]) 
+    random_matrix = np.random.rand(kernel_shape[3], kernel_shape[0] * kernel_shape[1] * kernel_shape[2])
+
+
     u,_,vt = np.linalg.svd(random_matrix, full_matrices=False)
-    print("svd finished, vt shape: %s" % str(np.shape(vt)))
-    w = np.reshape(vt.T, [kernel_shape[0], kernel_shape[1], kernel_shape[2], kernel_shape[3]])
+    print("svd finished, vt shape: %s, u shape: %s" % (str(np.shape(vt)), str(np.shape(u))))
+    if np.shape(random_matrix)[0] > np.shape(random_matrix)[1]:
+        w = np.reshape(u, [kernel_shape[0], kernel_shape[1], kernel_shape[2], kernel_shape[3]])
+    else:
+        w = np.reshape(vt, [kernel_shape[0], kernel_shape[1], kernel_shape[2], kernel_shape[3]])
+
 
     # the 0.9 multiplier is there because of using leaky relu, so variance for x < 0
     # is not 0, but 0.1 * variance(x>0)
@@ -116,7 +122,7 @@ def plot2DWavelet(xi, R, norming = False):
     plt.show()
 
 
-def plot2DKernels(kernels, square_width = 1.0, square_height = 1.0):
+def plot2DKernels(kernels, square_width = 1.0, square_height = 1.0, normalize = False):
     numOfKernels = np.shape(kernels)[0]
     numOfRows = int(np.ceil(np.sqrt(numOfKernels)))
     numOfCols = int(np.ceil(numOfKernels / numOfRows))
@@ -133,7 +139,7 @@ def plot2DKernels(kernels, square_width = 1.0, square_height = 1.0):
             index = i*numOfRows + j
 
             if index < numOfKernels:
-                plot2DKernel(axs[i,j], kernels[index])
+                plot2DKernel(axs[i,j], kernels[index], normalize = normalize)
             else:
                 break
 

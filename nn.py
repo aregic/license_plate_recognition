@@ -46,8 +46,8 @@ TILE_NUMBER_X = 5
 TILE_NUMBER_Y = 5
 
 # sizes must be multiples of the respective TILE_NUMBER_[X|Y]s!
-SIZE_X = 512 # tried: 256
-SIZE_Y = 512 # tried: 256
+SIZE_X = 400 # tried: 256
+SIZE_Y = 400 # tried: 256
 
 MAX_NUMBER_OF_LABELS = 5
 BOUNDING_BOX_PER_CELL = 1

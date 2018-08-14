@@ -81,6 +81,15 @@ def non_max_supp(labels):
     return res
 
 
+def convert_network_output(network_output, alpha = 0.5):
+    res = {}
+    for i in range(np.shape(network_output)[0]):
+        for j in range(np.shape(network_output)[1]):
+            if network_output[i,j,5] > alpha:
+                res[(i,j)] = np.reshape(network_output[i,j,:4], [2,2])
+    return res
+
+
 
 def get_image_stats(location : str):
     """
@@ -251,12 +260,24 @@ def draw_bounding_polygon(image : np.ndarray, label_polygon : list, output_polyg
     plt.show()
 
 
+def plot_output(image, label_output, logit_output, alpha = 0.5):
+    converted_label = convert_network_output(logit_output, alpha)
+    print("number of filtered elements in logit output: %i" % len(converted_label))
+    print("filtered output: %s" % str(converted_label))
+    draw_float_bounding_box(
+            np.squeeze(image),
+            np.reshape(label_output[:,:4], [np.shape(label_output)[0],2,2]), 
+            converted_label,
+            midrepr = True)
+
+
 def draw_float_bounding_box(image : np.ndarray,
                             label_polygon : list,
                             output_polygon : list = None,
                             draw_tiles : bool = False,
-                            tile_num_x = 8,
-                            tile_num_y = 8):
+                            tile_num_x = 5,
+                            tile_num_y = 5,
+                            midrepr = False):
     """
         `label_polygon` and `output_polygon` are both expected in the following form:
           [ [x1,y1], [x2,y2] ]
@@ -287,23 +308,38 @@ def draw_float_bounding_box(image : np.ndarray,
         output[0][1] *= size_y
         output[1][1] *= size_y
 
+        if midrepr:
+            output[0][0] -=  (output[1][0] / 2)
+            output[0][1] -=  (output[1][1] / 2)
+
         ax.add_patch(patches.Rectangle( 
             (output[0][0], output[0][1]),
             output[1][0], output[1][1],
             fill=True, linewidth=1, color='tab:green', alpha=0.5))
 
     if output_polygon is not None:
-        for one_output in output_polygon:
+        for pos, one_output in output_polygon.items():
             output = np.copy(np.asarray(one_output))
 
-            output[0][0] *= size_x
-            output[1][0] *= size_x
+            print("output: (%s, %s)" % (pos, one_output))
+
+            output[0][0] += (pos[1] / tile_num_x)
+            output[0][1] += (pos[0] / tile_num_y)
+
+            print("(%.8f, %.8f)" % (output[0][0], output[0][1]))
+
+            output[0][0] *= size_x/tile_num_x
+            output[1][0] *= size_x/tile_num_y
             output[0][1] *= size_y
             output[1][1] *= size_y
 
+            if midrepr:
+                output[0][0] -=  (output[1][0] / 2)
+                output[0][1] -=  (output[1][1] / 2)
+
             ax.add_patch(patches.Rectangle( 
                 (output[0][0], output[0][1]),
-                output[1][0], output[1][1],
+                output[1][1], output[1][0],
                 fill=True, linewidth=1, color='tab:blue', alpha=0.5))
 
     ax.imshow(image, cmap='gray')

@@ -2,6 +2,9 @@
 __pychache__/
 *pyc
 
+# PyCharm
+.idea
+
 logs/*
 checkpoints/*
 

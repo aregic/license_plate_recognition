@@ -1,0 +1,74 @@
+\begin{comment}
+    A visszaterjesztéses tanulás alapja a deriválás lánc-szabálya. Legyen a $w_i$  egy neuron súlyainak $n$ dimenziós vektora, $x_i$ egy adott bemeneti vektor, $b_i$ pedig az eltolásvektor. Ekkor az i. neuron kimenete:
+    
+    \begin{equation}
+        f_i = \text{ReLU}(\sum_{j=1}^{n}w_{i,j} x_{i,j} + b_{i,j})
+    \end{equation}
+    
+    Itt Leaky ReLU-t használok, ami emlékeztetőnek:
+    \begin{equation}
+        \phi(x) = \left\{
+            \begin{array}{ll}
+                x       & \text{ha}\ x > 0 \\
+                0.1x    & \text{különben}
+            \end{array}
+        \right.
+    \end{equation}
+    
+    
+    Tegyük fel, hogy $f_i$ kimeneti meuron, $x_i$ egy másik neuron kimenete. Legyen ez a neuron az $f_{i-1}$. Itt én Leaky ReLU-t használok, azaz egy $w_{i-1}$ súlyra vett parciális derivált:
+    
+    \begin{equation}
+        \begin{array}{ll}
+            \ddfrac{\partial f_i}{\partial w_{i-1}} = x_{i-1} w_i & \text{ha } \sum_{i=1}^{n}w_{i-1,j} x_{i-1,j} + b_{i-1,j} \ge 0 \\
+            \\
+            \ddfrac{\partial f_i}{\partial w_{i-1}} = 0.1 x_{i-1} w_i & \text{ha } \sum_{i=1}^{n}w_{i-1,j} x_{i-1,j} + b_{i-1,j} < 0
+        \end{array}
+    \end{equation}
+    
+    Vagyis a súlyra vett derivált értéke függ a következő réteg súlyaitól. Ha még egy réteggel visszaterjesztjük (az egyszerűség kedvéért tegyük fel, hogy minden neuron kimenete pozitív, mert ekkor a leaky ReLU deriváltja 1):
+    
+    \begin{equation}
+            \ddfrac{\partial f_i}{\partial w_{i-2}} = \ddfrac{\partial f_i}{\partial f_{i-1}} \ddfrac{\partial f_{i-1}}{\partial w_{i-2}} = 
+                x_{i-2} w_{i-1} w_i \\
+    \end{equation}
+    
+    És így tovább. Egy neuron kimenete azonban több neuronhoz van kapcsolva a következő rétegben, így a végső gradiens a tagonkénti deriválás szabályának megfelelően az ezekre vett parciális deriváltak összege.
+    
+    A célunk, hogy a súlyokra vett parciális deriváltak átlagos 1 közelében legyenek, mert ekkor a súlyok megközelítőleg azonos mértékben változnak a tanulás során. 
+    
+    \begin{equation}
+        \text{Error}' = 2(f_n - l)f'
+    \end{equation}
+
+\end{comment}
+
+=========================================
+
+A batch normalizáció egyik mellékes előnye, hogy segít az eltűnő vagy felrobbanó gradiens problémával szemben:
+
+\begin{center}
+\begin{tabular}{|c|c|c|}
+	 \hline
+		conv1/weights:0 & 0.00273 & 8979.58496 \\ 
+		conv1/biases:0 & 5e-05 & 510.39447 \\ 
+		conv2/weights:0 & 0.00065 & 1513.90405 \\ 
+		conv2/biases:0 & 1e-05 & 318.64114 \\ 
+		conv3/weights:0 & 0.00033 & 3922.33496 \\ 
+		conv3/biases:0 & 0.0 & 98.47105 \\ 
+		conv4/weights:0 & 0.0002 & 4686.0 \\ 
+		conv4/biases:0 & 1e-05 & 39.74956 \\ 
+		conv5/weights:0 & 0.00019 & 5352.99609 \\ 
+		conv5/biases:0 & 1e-05 & 98.20941 \\ 
+		conv6/weights:0 & 0.00022 & 4041.54321 \\ 
+		conv6/biases:0 & 0.0 & 143.04898 \\ 
+		local3/weights:0 & 0.0132 & 85381.75 \\ 
+		local3/biases:0 & 5e-05 & 114.21997 \\ 
+		output\_layer/weights:0 & 0.00406 & 6825.31641 \\ 
+		output\_layer/biases:0 & 0.0 & 62.87528 \\ 
+	\hline
+\end{tabular}
+\end{center}
+\captionof{table}{A baloldali oszlopban batch normalizációval, a jobb oldaliban a nélküli eredmények láthatóak. Látható ahogy "felrobban" a gradiens, a legalsó rétegben már a kimeneti ré\newline}
+
+Itt a háló már batch normalizációval lett betanítva, amikor a nélkül tanítottam inkább eltűnő és nem felrobbanó gradienst tapasztaltam.
