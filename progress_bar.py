@@ -1,7 +1,7 @@
 import sys
 
-def progress_bar(count, total, prefix='', suffix=''):
-    bar_len = 50
+
+def progress_bar(count, total, prefix='', suffix='', bar_len = 50):
     filled_len = int(round(bar_len * count / float(total)))
 
     percents = round(100.0 * count / float(total), 1)

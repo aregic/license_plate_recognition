@@ -1,13 +1,13 @@
 import tensorflow as tf
 from nn import *
-import json
-import math
+
+
+class Network:
+    pass
 
 
 class Yolo:
     # taken from https://github.com/nilboy/tensorflow-yolo/blob/python2.7/yolo/net/yolo_net.py
-    class Network:
-        pass
 
     def __init__(self, common_params, net_params, test=False):
         """
@@ -39,6 +39,7 @@ class Yolo:
         self.initial_learning_rate = float(net_params['initial learning rate'])
         self.learning_decay = float(net_params['learning decay'])
         self.momentum = float(net_params.get('learning momentum'))
+        self.use_gabor_wavelet = bool(net_params.get('use gabor wavelet', False))
 
         self.preprocessor = Preprocessor(
             self.image_size,
@@ -54,14 +55,18 @@ class Yolo:
         self.network = Network()
 
     def inference(self, image):
-        # lower layers are like inception-v3's
-        basic_kernels = np.asarray([getBasicKernels()]).astype(np.float32)
-        # the swapping will probably transpose the kernels but that doesn't matter at the moment
-        basic_kernels = np.swapaxes(basic_kernels, 0, 2)
-        basic_kernels = np.swapaxes(basic_kernels, 1, 3)
+        if self.use_gabor_wavelet:
+            # init lower layer to predefined kernels (gabor wavelets, edge detectors, etc.)
+            basic_kernels = np.asarray([getBasicKernels()]).astype(np.float32)
 
-        # layer1 = create_layer(image, [7,7,1,32], 0.0, 5e-2, "conv1", const_init = basic_kernels)
-        layer1 = create_layer(image, [3, 3, 1, 32], 0.0, 5e-2, "conv1", show_tensor=True)
+            # the swapping will probably transpose the kernels but that doesn't matter at the moment
+            basic_kernels = np.swapaxes(basic_kernels, 0, 2)
+            basic_kernels = np.swapaxes(basic_kernels, 1, 3)
+
+            layer1 = create_layer(image, [7,7,1,32], 0.0, 5e-2, "conv1", const_init = basic_kernels)
+
+        else:
+            layer1 = create_layer(image, [3, 3, 1, 32], 0.0, 5e-2, "conv1", show_tensor=True)
 
         """
         if self.detailed_log:
@@ -112,7 +117,8 @@ class Yolo:
             pre_act3 = tf.matmul(reshape, weights) + biases
             local3 = leakyRelu(pre_act3)
             bnormed_3 = tf.layers.batch_normalization(local3, training=True)
-            dropped_local3 = tf.nn.dropout(local3, 0.5)
+            # dropped_local3 = tf.nn.dropout(local3, 0.5)
+            dropped_local3 = tf.nn.dropout(bnormed_3, 0.5)
 
         """
         # local4
@@ -187,7 +193,7 @@ class Yolo:
 
         return self.network.train_op, grads
 
-    def get_inference_result(self, dataset_file: dir, train_on_tiles=False, use_dataset=False):
+    def get_inference_result(self, dataset_file: dir):
         """
             Leave train on tiles on False for now.
         """
@@ -196,83 +202,58 @@ class Yolo:
             global_step = tf.contrib.framework.get_or_create_global_step()
             # global_step_tensor = tf.Variable(1, trainable=False, name='global_step')
 
-            if use_dataset:
-                pic_batch, label_batch = readFromDataSet(dataset_file, train_on_tiles)
-            else:
-                pic_batch, label_batch, enqueue_op, enq_image, enq_label, examples_in_queue = readOnTheFly()
+            pic_batch, label_batch, enqueue_op, enq_image, enq_label, examples_in_queue = readOnTheFly()
 
             # logits, tiles = self.inference(pic_batch)
             logits = self.inference(pic_batch)
 
-            if train_on_tiles:
-                # if dataset is created with train_on_tiles is True, label_batch will actually
-                # contain the tile matrix...
-                # TODO fix this
-                if self.detailed_log:
-                    tf.summary.image(
-                        "tile label",
-                        tf.reshape(label_batch, [self.batch_size, self.cell_size, self.cell_size, 1]))
-                    alpha_cut = np.full([self.batch_size, self.cell_size, self.cell_size], ALPHA_CUT, dtype=np.float32)
-                    tf.summary.image(
-                        "tile output",
-                        tf.cast(
-                            tf.reshape(tf.greater_equal(tiles, tf.convert_to_tensor(alpha_cut)),
-                                       [self.batch_size, self.cell_size, self.cell_size, 1]),
-                            dtype=tf.float32))
-
-                self.network.loss, _ = self.loss(tiles, label_batch)
-                self.network.train_op = self.train(self.network.loss, global_step)
-
-            else:
-                """
-                label_batch_filtered = tf.boolean_mask(
-                        label_batch,
-                        tf.cast(label_batch[:,:,4], dtype=tf.bool))
-                label_batch_filtered = tf.Print(label_batch_filtered, [label_batch_filtered], "\n\nLABEL BATCH FILTERED: ", summarize=250)
-                label_batch_filtered = tf.Print(label_batch_filtered, [label_batch], "\n\nLABEL BATCH: ", summarize=250)
-                """
-                number_of_boxes = tf.cast(tf.count_nonzero(label_batch[:, :, 4], 1), dtype=tf.int32)
-                # number_of_boxes = tf.Print(number_of_boxes, [number_of_boxes], "\n\nNumber of boxes: ",
-                #        summarize=10)
-                self.network.loss, _ = self.loss(logits, label_batch, number_of_boxes)
-                extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-                with tf.control_dependencies(extra_update_ops):
-                    self.network.train_op, grads = self.train(self.network.loss, global_step)
+            """
+            label_batch_filtered = tf.boolean_mask(
+                    label_batch,
+                    tf.cast(label_batch[:,:,4], dtype=tf.bool))
+            label_batch_filtered = tf.Print(label_batch_filtered, [label_batch_filtered], "\n\nLABEL BATCH FILTERED: ", summarize=250)
+            label_batch_filtered = tf.Print(label_batch_filtered, [label_batch], "\n\nLABEL BATCH: ", summarize=250)
+            """
+            number_of_boxes = tf.cast(tf.count_nonzero(label_batch[:, :, 4], 1), dtype=tf.int32)
+            # number_of_boxes = tf.Print(number_of_boxes, [number_of_boxes], "\n\nNumber of boxes: ",
+            #        summarize=10)
+            self.network.loss, _ = self.loss(logits, label_batch, number_of_boxes)
+            extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            with tf.control_dependencies(extra_update_ops):
+                self.network.train_op, grads = self.train(self.network.loss, global_step)
 
             coord = tf.train.Coordinator()
 
-            if not use_dataset:
-                samples_iter = get_samples()
+            samples_iter = get_samples()
 
             with tf.Session().as_default() as sess:
                 sess.run(tf.local_variables_initializer())
                 sess.run(tf.global_variables_initializer())
                 # tf.train.global_step(sess, global_step_tensor)
 
-                if not use_dataset:
-                    threads = []
-                    for i in range(self.num_of_preprocess_threads):
-                        # print("Creating thread %i" % i)
-                        t = threading.Thread(target=load_preproc_enqueue_thread, args=(
-                            sess, coord, enqueue_op, enq_image, enq_label, samples_iter
-                        ))
+                threads = []
+                for i in range(self.num_of_preprocess_threads):
+                    # print("Creating thread %i" % i)
+                    t = threading.Thread(target=load_preproc_enqueue_thread, args=(
+                        sess, coord, enqueue_op, enq_image, enq_label, samples_iter
+                    ))
 
-                        t.setDaemon(True)
-                        t.start()
-                        threads.append(t)
-                        coord.register_thread(t)
-                        time.sleep(0.5)
+                    t.setDaemon(True)
+                    t.start()
+                    threads.append(t)
+                    coord.register_thread(t)
+                    time.sleep(0.5)
 
+                num_examples_in_queue = sess.run(examples_in_queue)
+                while num_examples_in_queue < MIN_QUEUE_EXAMPLES:
                     num_examples_in_queue = sess.run(examples_in_queue)
-                    while num_examples_in_queue < MIN_QUEUE_EXAMPLES:
-                        num_examples_in_queue = sess.run(examples_in_queue)
-                        for t in threads:
-                            if not t.isAlive():
-                                coord.request_stop()
-                                raise ValueError("One or more enqueuing threads crashed...")
-                        time.sleep(0.1)
+                    for t in threads:
+                        if not t.isAlive():
+                            coord.request_stop()
+                            raise ValueError("One or more enqueuing threads crashed...")
+                    time.sleep(0.1)
 
-                    print("# of examples in queue: %i" % num_examples_in_queue)
+                print("# of examples in queue: %i" % num_examples_in_queue)
 
                 # Create a coordinator and run all QueueRunner objects
                 coord = tf.train.Coordinator()
@@ -320,43 +301,23 @@ class Yolo:
             # logits, tiles = self.inference(pic_batch)
             logits = self.inference(pic_batch)
 
-            if train_on_tiles:
-                # if dataset is created with train_on_tiles is True, label_batch will actually
-                # contain the tile matrix...
-                # TODO fix this
-                if self.detailed_log:
-                    tf.summary.image(
-                        "tile label",
-                        tf.reshape(label_batch, [self.batch_size, self.cell_size, self.cell_size, 1]))
-                    alpha_cut = np.full([self.batch_size, self.cell_size, self.cell_size], ALPHA_CUT, dtype=np.float32)
-                    tf.summary.image(
-                        "tile output",
-                        tf.cast(
-                            tf.reshape(tf.greater_equal(tiles, tf.convert_to_tensor(alpha_cut)),
-                                       [self.batch_size, self.cell_size, self.cell_size, 1]),
-                            dtype=tf.float32))
+            """
+            label_batch_filtered = tf.boolean_mask(
+                    label_batch,
+                    tf.cast(label_batch[:,:,4], dtype=tf.bool))
+            label_batch_filtered = tf.Print(label_batch_filtered, [label_batch_filtered], "\n\nLABEL BATCH FILTERED: ", summarize=250)
+            label_batch_filtered = tf.Print(label_batch_filtered, [label_batch], "\n\nLABEL BATCH: ", summarize=250)
+            """
+            number_of_boxes = tf.cast(tf.count_nonzero(label_batch[:, :, 4], 1), dtype=tf.int32)
+            # number_of_boxes = tf.Print(number_of_boxes, [number_of_boxes], "\n\nNumber of boxes: ",
+            #        summarize=10)
+            self.network.loss, _ = self.loss(logits, label_batch, number_of_boxes)
 
-                self.network.loss, _ = self.loss(tiles, label_batch)
+            extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            with tf.control_dependencies(extra_update_ops):
                 self.network.train_op, _ = self.train(self.network.loss, global_step)
 
-            else:
-                """
-                label_batch_filtered = tf.boolean_mask(
-                        label_batch,
-                        tf.cast(label_batch[:,:,4], dtype=tf.bool))
-                label_batch_filtered = tf.Print(label_batch_filtered, [label_batch_filtered], "\n\nLABEL BATCH FILTERED: ", summarize=250)
-                label_batch_filtered = tf.Print(label_batch_filtered, [label_batch], "\n\nLABEL BATCH: ", summarize=250)
-                """
-                number_of_boxes = tf.cast(tf.count_nonzero(label_batch[:, :, 4], 1), dtype=tf.int32)
-                # number_of_boxes = tf.Print(number_of_boxes, [number_of_boxes], "\n\nNumber of boxes: ",
-                #        summarize=10)
-                self.network.loss, _ = self.loss(logits, label_batch, number_of_boxes)
-
-                extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-                with tf.control_dependencies(extra_update_ops):
-                    self.network.train_op, _ = self.train(self.network.loss, global_step)
-
-                # train_op = self.train(loss, global_step)
+            # train_op = self.train(loss, global_step)
 
             coord = tf.train.Coordinator()
 
@@ -442,7 +403,8 @@ class Yolo:
                 coord.request_stop()
                 coord.join(threads)
 
-    def iou(self, boxes1, boxes2):
+    @staticmethod
+    def iou(boxes1, boxes2):
         """
             calculate ious
 
@@ -452,6 +414,8 @@ class Yolo:
             Return:
               iou: 3-D tensor [CELL_SIZE, CELL_SIZE, BOXES_PER_CELL]
         """
+        # boxes1 layout: x1, y1, x2, y2
+        # where the bounding box's left upper left corner is (x1, y1), bottom right is (x2, y2)
         boxes1 = tf.stack([boxes1[:, :, :, 0] - boxes1[:, :, :, 2] / 2, boxes1[:, :, :, 1] - boxes1[:, :, :, 3] / 2,
                            boxes1[:, :, :, 0] + boxes1[:, :, :, 2] / 2, boxes1[:, :, :, 1] + boxes1[:, :, :, 3] / 2])
         boxes1 = tf.transpose(boxes1, [1, 2, 3, 0])
@@ -470,8 +434,8 @@ class Yolo:
         inter_square = mask * inter_square
 
         # calculate the boxs1 square and boxs2 square
-        square1 = (boxes1[:, :, :, 2] - boxes1[:, :, :, 0]) * (boxes1[:, :, :, 3] - boxes1[:, :, :, 1])
-        square2 = (boxes2[2] - boxes2[0]) * (boxes2[3] - boxes2[1])
+        square1 = boxes1[:, :, :, 2] * boxes1[:, :, :, 3]
+        square2 = boxes2[2] * boxes2[3]
 
         return inter_square / (square1 + square2 - inter_square + 1e-6)
 
@@ -496,7 +460,8 @@ class Yolo:
         min_y = (label[1] - (label[3] / 2)) * self.cell_size
         max_y = (label[1] + (label[3] / 2)) * self.cell_size
 
-        # due to normalization and rouding error the bounding box can slightly leave the picture...
+        # due to rouding error the bounding box can slightly leave the picture,
+        # which might result in index out of bounds, so clip it
         min_x = tf.clip_by_value(tf.floor(min_x), 0, self.cell_size - 1)
         min_y = tf.clip_by_value(tf.floor(min_y), 0, self.cell_size - 1)
 
