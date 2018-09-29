@@ -7,7 +7,7 @@ class Network:
 
 
 class Yolo:
-    # taken from https://github.com/nilboy/tensorflow-yolo/blob/python2.7/yolo/net/yolo_net.py
+    # based on https://github.com/nilboy/tensorflow-yolo/blob/python2.7/yolo/net/yolo_net.py
 
     def __init__(self, common_params, net_params, test=False):
         """
@@ -668,7 +668,8 @@ def _variable_on_cpu(name, shape, initializer):
     """
     # with tf.device('/cpu:0'):
     with tf.device('/gpu:0'):
-        dtype = tf.float16 if FLAGS.use_fp16 else tf.float32
+        # dtype = tf.float16 if FLAGS.use_fp16 else tf.float32
+        dtype = tf.float32
         var = tf.get_variable(name, shape, initializer=initializer, dtype=dtype)
     return var
 
