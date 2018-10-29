@@ -1,0 +1,28 @@
+{
+  "SimpleNetConfig" : {
+    "use_gabor_wavelet" : true,
+    "batch_size" : 10,
+    "epoch_per_decay" : 100,
+    "initial_learning_rate" : 1e-4,
+    "learning_decay" : 1.0,
+    "learning_momentum" : 1e-4,
+    "model_name" : "simple_net",
+    "slide_x" : 50,
+    "slide_y" : 50,
+    "window_width" : 50,
+    "window_height" : 50,
+    "output_dim" : 4,
+    "max_label_num" : 1
+  },
+  "EnvConfig" : {
+    "examples_per_epoch" : 1000,
+    "number_of_input_threads" : 7,
+    "min_queue_examples" : 50,
+    "max_number_of_steps" : 100000000,
+    "log_frequency" : 100,
+    "log_dir" : "./logs",
+    "save_frequency" : 1000,
+    "checkpoint_dir" : "./checkpoints",
+    "sample_dir" : "./samples"
+  }
+}

@@ -5,7 +5,13 @@ import scipy
 import tensorflow as tf
 from progress_bar import progress_bar
 from inspect_images import *
-from tiling import TileCounter
+from enum import Enum
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import math
+from etc import threadsafe_generator
+from typing import List
+from collections import namedtuple
 
 RANDOM_SEED = 2343298
 TRAINING_SET_RATIO = 2
@@ -210,4 +216,183 @@ def convertAllToHeightWidthRepr(sample_folder : dir, output_folder : dir):
                 output_file_path = '.'.join(join(output_folder, f).split('.')[:-1]) + '.txt'
                 writeLabelsToFile(converted, output_file_path)
 
-       
+
+class InputIterator:
+    def getOutputDim(self) -> List[int]:
+        raise NotImplementedError("Function not implemented")
+
+
+class SlidingWindowSampleCreator:
+    # TODO add support for other padding types
+    class Padding(Enum):
+        ZEROES = 1
+        DONT_SLIDE_OUTSIDE = 2   # WARNING! Not supported yet!
+
+    def __init__(self, slide_x : int, slide_y : int, window_width : int, window_height : int):
+        """This class creates small cropped images out of a big one along a sliding window.
+        If part of the window would go outside the picture, it will be padded by zeros.
+
+        :param slide_x: window will slide along the x axis by this ammount
+        :param slide_y: window will slide along the y axis by this ammount
+        :param window_width: width of the sliding window
+        :param window_height: height of the sliding window
+        """
+        self.slide_x = slide_x
+        self.slide_y = slide_y
+        self.window_width = window_width
+        self.window_height = window_height
+
+
+    def getOutputDim(self):
+        # max number of labels: 1, size of label: 4
+        return self.window_height, self.window_width, 1, 4
+
+
+    @threadsafe_generator
+    def create_sliding_window_samples(self, image : np.ndarray, labels : np.ndarray = None):
+        """creates cropped image via sliding window
+
+        note: label is expected in the (left upper point, right bottom point) representation,
+            not in width-height form!
+
+        :param image: ndarray containing the image as grayscale
+        :param labels: ndarray in the following form: [[x1, y1, x2, y2], ...]
+        :return: cropped part of the image
+        """
+        #if self.padding == SlidingWindowSampleCreator.Padding.ZEROES:
+        num_of_slide_x = math.ceil( ( image.shape[1] - self.window_width ) / self.slide_x )
+        num_of_slide_y = math.ceil( ( image.shape[0] - self.window_height ) / self.slide_y )
+        pad_x = self.window_width - ( ( image.shape[1] - self.window_width ) % self.slide_x )
+        pad_x %= self.window_width
+        pad_y = self.window_height - ( ( image.shape[0] - self.window_height ) % self.slide_y )
+        pad_y %= self.window_height
+
+        """
+        print("Padding added: (%i, %i)" % (pad_x, pad_y))
+        print("Number of sliding: (%i, %i)" % (num_of_slide_x, num_of_slide_y))
+        print("asdasdsd")
+        """
+
+        padded_image = np.pad(image.copy(), ((0, pad_y), (0, pad_x)), mode='constant', constant_values=0)
+
+        if labels is None:
+            for i in range(num_of_slide_x+1):
+                for j in range(num_of_slide_y+1):
+                    x = i*self.slide_x
+                    y = j*self.slide_y
+                    yield padded_image[y:y + self.window_height, x:x + self.window_width]
+
+        else:
+            for i in range(num_of_slide_x + 1):
+                for j in range(num_of_slide_y + 1):
+                    x = i * self.slide_x
+                    y = j * self.slide_y
+
+                    label = filter_and_transform_labels(labels, x, y, self.window_width, self.window_height)
+
+                    yield padded_image[y:y + self.window_height, x:x + self.window_width], label
+
+
+    @threadsafe_generator
+    def create_sliding_window_from_iter(self, image_iter):
+        for i in image_iter:
+            for j in self.create_sliding_window_samples(i["image"], i["label"]):
+                yield j
+
+
+EnqueueThread = namedtuple("EnqueueThread",
+    [ "pic_batch", "label_batch", "enqueue_op", "enq_image", "enq_label", "examples_in_queue", "queue_close_op"])
+
+
+def crop_labels(labels : np.ndarray, window_width : int, window_height : int) -> list:
+    def crop_x(x):
+        return min(max(x, 0), window_width)
+    def crop_y(y):
+        return min(max(y, 0), window_height)
+
+    return [ [crop_x(l[0]), crop_y(l[1]), crop_x(l[2]), crop_y(l[3])] for l in labels ]
+
+
+def shift_labels(labels : np.ndarray, x : int, y : int) -> list:
+    return [[l[0] - x, l[1] - y, l[2] - x, l[3] - y] for l in labels]
+
+
+def shift_and_crop_labels(labels : np.ndarray, x : int, y : int, window_width : int, window_height : int) -> np.ndarray:
+    return crop_labels(shift_labels(labels, x,y), window_width, window_height)
+
+
+def filter_and_transform_labels(labels : np.ndarray, x : int, y : int, window_width : int, window_height : int) \
+        -> np.ndarray:
+    filtered_labels = [l for l in labels if isLabelInWindow(l, x, y, window_width, window_height)]
+    if len(filtered_labels) > 0:
+        # it is expected that at most one label remains in the picture
+        return shift_and_crop_labels(labels, x, y, window_height, window_width)[0]
+    else:
+        return [-1, -1, -1, -1]
+
+
+def isLabelInWindow(label : np.ndarray, x : int, y : int, window_width : int, window_height : int) -> bool:
+    return (x < label[0] < x + window_width) or\
+           (y < label[1] < y + window_height) or\
+           (x < label[2] < x + window_width) or\
+           (y < label[3] < y + window_height)
+
+
+def plotImages(images : np.ndarray, square_width = 1.0, square_height = 1.0, normalize = False):
+    #numOfKernels = np.shape(images)[0]
+    numOfImages = len(images)
+    numOfRows = int(np.ceil(np.sqrt(numOfImages)))
+    numOfCols = int(np.ceil(numOfImages / numOfRows))
+
+    f, axs = plt.subplots(numOfCols, numOfRows, figsize=(numOfRows, numOfCols))
+
+    # axs is a 2d array
+    for ax1 in axs:
+        for ax2 in ax1:
+            ax2.axis('off')
+
+    for i in range(numOfCols):
+        for j in range(numOfRows):
+            index = i*numOfRows + j
+
+            if index < numOfImages:
+                axs[i, j].imshow(images[index], cmap='gray')
+            else:
+                return
+
+
+def plotImagesWithLabels(images_with_labels : np.ndarray, square_width = 1.0, square_height = 1.0, normalize = False):
+    #numOfKernels = np.shape(images)[0]
+    images = []
+    labels = []
+    for (im, la) in images_with_labels:
+        images.append(im)
+        labels.append(la)
+
+    print("Images size: %s, labels size: %s" % (len(images), len(labels)))
+
+    numOfImages = len(images)
+    numOfRows = int(np.ceil(np.sqrt(numOfImages)))
+    numOfCols = int(np.ceil(numOfImages / numOfRows))
+
+    f, axs = plt.subplots(numOfCols, numOfRows, figsize=(numOfRows, numOfCols))
+
+    # axs is a 2d array
+    for ax1 in axs:
+        for ax2 in ax1:
+            ax2.axis('off')
+
+    for i in range(numOfCols):
+        for j in range(numOfRows):
+            index = i*numOfRows + j
+
+            if index < numOfImages:
+                label = labels[index]
+                axs[i, j].imshow(images[index], cmap='gray')
+                axs[i, j].add_patch(patches.Rectangle(
+                    (label[0], label[1]),
+                    label[2] - label[0], label[3] - label[1],
+                    fill=False, linewidth=1, color='tab:blue'))
+            else:
+                plt.show()
+                return

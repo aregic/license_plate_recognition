@@ -7,6 +7,9 @@ from nn import *
 from tensorflow.python import debug as tf_debug
 import configparser
 from yolo import Yolo
+import json
+from simple_nn import *
+from data_feeder import *
 
 
 def doit():
@@ -55,13 +58,31 @@ print("Result: %s, %s, %s" % (pic,label,origlabel))
 """
 draw_bounding_box(pic, label)
 """
+def run_yolo():
+    config = configparser.ConfigParser()
+    config.read('config.cfg')
 
-config = configparser.ConfigParser()
-config.read('config.cfg')
+    yolo = Yolo(config['common params'], config['net params'])
+    yolo.train_on_lots_of_pics('asd')
 
-yolo = Yolo(config['common params'], config['net params'])
-yolo.train_on_lots_of_pics('asd')
 
+def run_simple_nn():
+    config = json.load(open("./simple_net_config.json"))
+    network_config = NetworkConfig(**config["SimpleNetConfig"])
+    env_config = EnvConfig(**config["EnvConfig"])
+
+    simple_net = SimpleNet(network_config, env_config)
+
+    image_iter = imageLabelIterator(env_config.sample_dir)
+    s = SlidingWindowSampleCreator(network_config.slide_x, network_config.slide_y, network_config.window_width,
+                                   network_config.window_height)
+
+    sliding_window_iter = s.create_sliding_window_from_iter(image_iter)
+
+    simple_net.train(sliding_window_iter)
+
+
+run_simple_nn()
 """
 #train_on_one_pic("./samples/pic107.jpg")
 train_on_lots_of_pics("dataset256_tiles.tfrecord", train_on_tiles = False, use_dataset = False)

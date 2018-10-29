@@ -3,7 +3,7 @@ __pychache__/
 *pyc
 
 # PyCharm
-.idea
+.idea/*
 
 logs/*
 checkpoints/*

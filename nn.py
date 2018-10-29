@@ -1,20 +1,16 @@
 import tensorflow as tf
-from tensorflow.python import debug as tf_debug
-import numpy as np
-from inspect_images import get_bounding_box, get_bounding_polygon
-import time
-from datetime import datetime
 import random
 import sys
-import threading
+from etc import threadsafe_generator
+from gaborwavelet import orthonormalInit
 
 from preprocessor import *
-from gaborwavelet import getBasicKernels, orthonormalInit
 
 FLAGS = tf.app.flags.FLAGS
 
 # for ipython compatibility, because if 'autoreload' re-imports the file,
 # it would duplicate these definitions
+"""
 if "batch_size" not in tf.app.flags.FLAGS.__flags.keys():
     tf.app.flags.DEFINE_integer('batch_size', 10,
                                         "Number of images to process in a batch.")
@@ -25,17 +21,18 @@ if "batch_size" not in tf.app.flags.FLAGS.__flags.keys():
     tf.app.flags.DEFINE_boolean('use_fp16', False,
                                         "Train the model using fp16.")
     tf.app.flags.DEFINE_boolean('log_device_placement', False,
-                                """Whether to log device placement.""")
+                                "Whether to log device placement.")
     tf.app.flags.DEFINE_integer('log_frequency', 20,
-                                """How often to log results to the console.""")
+                                "How often to log results to the console.")
     tf.app.flags.DEFINE_integer('max_steps', 1000000,
-                                """Number of batches to run.""")
+                                "Number of batches to run."
     tf.app.flags.DEFINE_string('checkpoint_dir', './checkpoints',
                                        "Path to dir where checkpoints are stored")
     tf.app.flags.DEFINE_integer('save_frequency', 400,
-                                """Number of batches to run.""")
+                                "Number of batches to run."
     tf.app.flags.DEFINE_boolean('debug', False, "Use debug mode")
     tf.app.flags.DEFINE_boolean('detailed_log', True, "Add pictures to log")
+"""
 
 # dimensions of the input image
 #SIZE_X = 512
@@ -53,7 +50,7 @@ MAX_NUMBER_OF_LABELS = 5
 BOUNDING_BOX_PER_CELL = 1
 
 # network is expected to ouput a bounding box which has 4 coordinates (2 vertices)
-OUTPUT_DIM=4
+OUTPUT_DIM = 4
 
 
 WEIGHT_DECAY = 0.0
@@ -156,155 +153,63 @@ def initialize_uninitialized_vars(sess):
     if len(not_initialized_vars):
         sess.run(tf.variables_initializer(not_initialized_vars))
 
+class SampleLoader:
+    def __init__(self, size_x : int, size_y : int, max_number_of_labels : int, data_dir : dir):
+        self.size_x = size_x
+        self.size_y = size_y
+        self.max_number_of_labels = max_number_of_labels
+        self.data_dir = data_dir
 
-def eval_on_pic(picloc : dir):
-    tf.reset_default_graph()
-    preprocessor = Preprocessor(SIZE_X, SIZE_Y)
-    with tf.Graph().as_default():
-        global_step = tf.contrib.framework.get_or_create_global_step()
+    @threadsafe_generator
+    def get_samples(self):
+        preprocessor = Preprocessor(self.size_x, self.size_y, self.max_number_of_labels)
+        pics = get_image_list(self.data_dir)
+        images, labels = (0,0)
 
+        random.seed(RANDOM_SEED)
+        training_set_size = int(TRAINING_SET_RATIO*len(pics))
+        training_pics = pics[:training_set_size]
+        #training_pics = pics
 
-        images, labels = (0,0) # ??? TODO remove if everything works
-        
-        images = []
-        labels = []
+        samples = []
+        for i in range(len(training_pics)):
+            picloc = training_pics[i]
+            progress_bar(i+1, len(training_pics), "Loading images: ")
+            fullpicloc = join(self.data_dir, picloc)
+            pic = scipy.ndimage.imread(fullpicloc, mode="L")
+            # The line below is for when the label files contain bounding polygons and
+            # not bounding boxes (the latter only provides 2 vertices: top-left and bottom-right corners).
+            #label = get_bounding_box(fullpicloc)
 
-        pic = scipy.ndimage.imread(picloc, mode="L")
+            # despite the name, this one works for bounding boxes too.
+            # TODO: fix this
+            labels = get_bounding_polygon(fullpicloc)
+            midpoint_labels = []
+            for l in labels:
+                boundingBox = BoundingBox(*np.reshape(l, [4]))
+                midpoint_labels.append(boundingBox.getMidPointRepr())
 
-        fullpicloc = picloc
-        
-        image = scipy.ndimage.imread(fullpicloc, mode="L")
-        label = get_bounding_polygon(fullpicloc)
-
-        image, label = preprocessor.preprocess(image, label)
-        float_image = tf.image.convert_image_dtype(image, dtype=tf.float32)
-        
-        images, labels = tf.train.shuffle_batch(
-                [float_image, label],
-                batch_size=FLAGS.batch_size,
-                num_threads=NUM_PREPROCESS_THREADS,
-                capacity=MIN_QUEUE_EXAMPLES + 3 * FLAGS.batch_size,
-                min_after_dequeue=MIN_QUEUE_EXAMPLES)           
-        """
-        images.append(float_image)
-        labels.append(label)
-        """
-
-        images = tf.convert_to_tensor(images, dtype=tf.float32)
-        labels = np.asarray(labels)
-        logits = inference(images)
-        print("logits: %s" % logits)
-        loss = _loss(logits,labels)
-
-        train_op = train(loss, global_step)
-        saver = tf.train.Saver()
-
-        with tf.Session().as_default() as sess:
-            if FLAGS.debug:
-                sess = tf_debug.LocalCLIDebugWrapperSession(sess)
-            saver.restore(sess, join(FLAGS.checkpoint_dir, "model.ckpt-1500"))
-            print("model restored")
-            inferenced_label = sess.run(logits)
-            res = sess.run(loss)
-            res_images = np.reshape(sess.run(images), [1, SIZE_X, SIZE_Y])
-
-        return res_images, labels, inferenced_label, res
-
-
-
-
-class threadsafe_iter:
-    """Takes an iterator/generator and makes it thread-safe by
-    serializing call to the `next` method of given iterator/generator.
-    """
-    def __init__(self, it):
-        self.it = it
-        self.lock = threading.Lock()
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        with self.lock:
-            return next(self.it)
-
-
-def threadsafe_generator(f):
-    """A decorator that takes a generator function and makes it thread-safe.
-    """
-    def g(*a, **kw):
-        return threadsafe_iter(f(*a, **kw))
-    return g
-
-
-@threadsafe_generator
-def get_samples():
-    preprocessor = Preprocessor(SIZE_X, SIZE_Y, MAX_NUMBER_OF_LABELS)
-    pics = get_image_list(FLAGS.data_dir)
-    images, labels = (0,0)
-
-    random.seed(RANDOM_SEED)
-    training_set_size = int(TRAINING_SET_RATIO*len(pics))
-    training_pics = pics[:training_set_size]
-    #training_pics = pics
-
-    samples = []
-    for i in range(len(training_pics)):
-        picloc = training_pics[i]
-        progress_bar(i+1, len(training_pics), "Loading images: ")
-        fullpicloc = join(FLAGS.data_dir, picloc)
-        pic = scipy.ndimage.imread(fullpicloc, mode="L")
-        # The line below is for when the label files contain bounding polygons and
-        # not bounding boxes (the latter only provides 2 vertices: top-left and bottom-right corners).
-        #label = get_bounding_box(fullpicloc)
-
-        # despite the name, this one works for bounding boxes too.
-        # TODO: fix this
-        labels = get_bounding_polygon(fullpicloc)
-        midpoint_labels = []
-        for l in labels:
-            boundingBox = BoundingBox(*np.reshape(l, [4]))
-            midpoint_labels.append(boundingBox.getMidPointRepr())
-        
-        pic,label = preprocessor.preprocess(pic, midpoint_labels)
-        """
-        try:
             pic,label = preprocessor.preprocess(pic, midpoint_labels)
-        except AssertionError as error:
-            print("Assertion error while processing picture %s" % picloc)
-            print("Error: %s" % error)
-            exit(-1)
-        """
-
-        samples.append({ "pic" : pic, "label" : label})
-
-
-    i = 0
-
-    #for i in range(len(training_pics)):
-    while True:
-        seed = random.randint(0,10000)
-        random.seed(seed)
-        random.shuffle(samples)
-        for i in range(len(samples)):
             """
-            pic = training_pics[i]
-            progress_bar(i+1, len(training_pics))
-
-            fullpicloc = join(FLAGS.data_dir, pic)
-            
-            image = scipy.ndimage.imread(fullpicloc, mode="L")
-            label = get_bounding_box(fullpicloc)
-
-            image, label = preprocess(image, label)
-            yield image, label
+            try:
+                pic,label = preprocessor.preprocess(pic, midpoint_labels)
+            except AssertionError as error:
+                print("Assertion error while processing picture %s" % picloc)
+                print("Error: %s" % error)
+                exit(-1)
             """
-            #images.append(image)
-            #labels.append(label)
-            yield samples[i]["pic"], samples[i]["label"]
 
+            samples.append({ "pic" : pic, "label" : label})
 
-    #return { "image" : images, "label" : labels }
+        #for i in range(len(training_pics)):
+        while True:
+            seed = random.randint(0,10000)
+            random.seed(seed)
+            random.shuffle(samples)
+            for i in range(len(samples)):
+                yield samples[i]["pic"], samples[i]["label"]
+
+        #return { "image" : images, "label" : labels }
 
 
 def load_preproc_enqueue_thread(sess, coord, enqueue_op, queue_images, queue_labels, sample_iterator):
@@ -343,6 +248,7 @@ def optimistic_restore(session, save_file):
     saver.restore(session, save_file)
 
 
+"""
 def readOnTheFly():
     enq_image = tf.placeholder(tf.float32, shape=[SIZE_X, SIZE_Y, 1])
     enq_label = tf.placeholder(tf.float32, shape=[MAX_NUMBER_OF_LABELS, 5])
@@ -360,7 +266,7 @@ def readOnTheFly():
     image_batch_queue, label_batch_queue = q.dequeue_many(FLAGS.batch_size)
 
     return image_batch_queue, label_batch_queue, enqueue_op, enq_image, enq_label, examples_in_queue
-
+"""
 
 def readFromDataSet(dataset_file : dir, train_on_tiles : bool):
     feature = {'train/label': tf.FixedLenFeature([], tf.string),
@@ -392,272 +298,114 @@ def readFromDataSet(dataset_file : dir, train_on_tiles : bool):
     return pic_batch, label_batch
 
 
-def train_on_lots_of_pics(dataset_file : dir, train_on_tiles = False, use_dataset = False):
-    tf.reset_default_graph()
-    with tf.Graph().as_default():
-        global_step = tf.contrib.framework.get_or_create_global_step()
+def create_layer(image, shape: np.ndarray, initialial_value: float, stddev: float,
+                 scope_name: str, dropout_rate: float = 0.0, leaky_alpha: float = 0.1,
+                 const_init=None, batch_norm=True, show_tensor=False):
+    if const_init is None:
+        initializer = tf.constant(orthonormalInit(shape))
+        # initializer = tf.truncated_normal_initializer(stddev=stddev, dtype=tf.float32) # stddev originally: 5e-2
+    else:
+        initializer = tf.constant(const_init)
 
-        if use_dataset:
-            pic_batch, label_batch = readFromDataSet(dataset_file, train_on_tiles)
+    with tf.variable_scope(scope_name) as scope:
+        kernel = variable_with_weight_decay('weights',
+                                            shape=None,
+                                            wd=0.0,
+                                            initializer=initializer)
+
+        conv = tf.nn.conv2d(image, kernel, [1, 1, 1, 1], padding='SAME')
+        biases = variable_on_cpu('biases', shape[3], tf.constant_initializer(initialial_value))
+        pre_activation = tf.nn.bias_add(conv, biases)
+        # conv1 = tf.nn.relu(pre_activation, name=scope.name)
+        # conv1 = tf.maximum(pre_activation, leaky_alpha * pre_activation, name="leaky_relu")
+
+        conv1 = leakyRelu(pre_activation, leaky_alpha)
+
+        if show_tensor:
+            kernels = tf.transpose(kernel[:, :, 0, :], [2, 0, 1])
+            tf.summary.image(
+                "kernel",
+                tf.reshape(kernels, [32, shape[0], shape[1], 1]),
+                max_outputs=32)
+
+        if batch_norm:
+            batch_normed = tf.layers.batch_normalization(conv1, training=True, trainable=True)
         else:
-            pic_batch, label_batch, enqueue_op, enq_image, enq_label, examples_in_queue = readOnTheFly()
+            batch_normed = conv1
 
-        logits, tiles = inference(pic_batch)
+        print("Layer %s initalized." % scope_name)
 
-        if train_on_tiles:
-            # if dataset is created with train_on_tiles is True, label_batch will actually
-            # contain the tile matrix...
-            # TODO fix this
-            if FLAGS.detailed_log:
-                tf.summary.image(
-                        "tile label",
-                        tf.reshape(label_batch, [FLAGS.batch_size, TILE_NUMBER_X, TILE_NUMBER_Y, 1]))
-                alpha_cut = np.full([FLAGS.batch_size, TILE_NUMBER_X, TILE_NUMBER_Y], ALPHA_CUT, dtype=np.float32)
-                tf.summary.image(
-                        "tile output",
-                        tf.cast(
-                            tf.reshape(tf.greater_equal(tiles, tf.convert_to_tensor(alpha_cut)),
-                                [FLAGS.batch_size, TILE_NUMBER_X, TILE_NUMBER_Y, 1]),
-                            dtype=tf.float32))
-
-            loss = _loss(tiles,label_batch)
-            train_op = train(loss, global_step)
-
+        if dropout_rate != 0.0:
+            dropped_conv1 = tf.nn.dropout(batch_normed, dropout_rate)
+            return dropped_conv1
         else:
-                
-
-            loss = _loss(logits,label_batch)
-            train_op = train(loss, global_step)
-
-        coord = tf.train.Coordinator()
-
-        if not use_dataset:
-            samples_iter = get_samples()
-
-        with tf.Session().as_default() as sess:
-            sess.run(tf.local_variables_initializer())
-            sess.run(tf.global_variables_initializer())
-
-            if not use_dataset:
-                threads = []
-                for i in range(NUM_PREPROCESS_THREADS):
-                    
-                    #print("Creating thread %i" % i)
-                    t = threading.Thread(target=load_preproc_enqueue_thread, args=(
-                        sess, coord, enqueue_op, enq_image, enq_label, samples_iter
-                    ))
-
-                    t.setDaemon(True)
-                    t.start()
-                    threads.append(t)
-                    coord.register_thread(t)
-                    time.sleep(0.5)
-
-                num_examples_in_queue = sess.run(examples_in_queue)
-                while num_examples_in_queue < MIN_QUEUE_EXAMPLES:
-                    num_examples_in_queue = sess.run(examples_in_queue)
-                    for t in threads:
-                        if not t.isAlive():
-                            coord.request_stop()
-                            raise ValueError("One or more enqueuing threads crashed...")
-                    time.sleep(0.1)
-
-                print("# of examples in queue: %i" % num_examples_in_queue)
-
-            # Create a coordinator and run all QueueRunner objects
-            coord = tf.train.Coordinator()
-            threads = tf.train.start_queue_runners(coord=coord)
-
-            last_time = time.time()
-            saver = tf.train.Saver()
-            #saver = tf.train.import_meta_graph(join(FLAGS.checkpoint_dir, "my_model.meta"))
-            checkpoint_file = join(FLAGS.checkpoint_dir, "my_model")
-            if isfile(join(FLAGS.checkpoint_dir, "checkpoint")):
-                #saver.restore(sess,tf.train.latest_checkpoint(FLAGS.checkpoint_dir))
-                optimistic_restore(sess, checkpoint_file)
-                initialize_uninitialized_vars(sess)
-                print("Model loaded.")
-
-            sum_writer = tf.summary.FileWriter(FLAGS.log_dir, graph=tf.get_default_graph())
-            merged = tf.summary.merge_all()
-            for i in range(FLAGS.max_steps):
-                if (i % FLAGS.save_frequency) != 0 or i == 0:
-                    if (i % FLAGS.log_frequency) != 0:
-                        sess.run([loss, train_op])
-                    #print("Number of items in queue: %i" % queued_size)
-                    else:
-                        if train_on_tiles:
-                            loss_value, res_tiles, res_label_tiles, _ = sess.run([loss, tiles, label_batch, train_op])
-                            tilenum = np.count_nonzero(res_label_tiles)
-                            positive_tiles = getPositiveTiles(res_tiles, ALPHA_CUT)
-                            #print("Positive tiles: %s" % positive_tiles)
-                            missed = np.count_nonzero(res_label_tiles - positive_tiles)
-                            act_time = time.time()
-                            exec_time = act_time - last_time
-                            samples_per_sec = FLAGS.batch_size * FLAGS.log_frequency / exec_time
-                            print("Step %i, loss: %f, execution time: %.4f, samples/second: %.4f" 
-                                    % (i, loss_value, exec_time, samples_per_sec) )
-                            print("Tiles in label: %i, tile in output: %i, missed: %i" % 
-                                    (tilenum, np.count_nonzero(positive_tiles), missed))
-                        else:
-                            loss_value, _ = sess.run([loss, train_op])
-                            act_time = time.time()
-                            exec_time = act_time - last_time
-                            samples_per_sec = FLAGS.batch_size * FLAGS.log_frequency / exec_time
-                            print("Step %i, loss: %f, execution time: %.4f, samples/second: %.4f" 
-                                    % (i, loss_value, exec_time, samples_per_sec) )
- 
-                        last_time = time.time()
-                else:
-                    sys.stdout.write("Saving model... ")
-                    sys.stdout.flush()
-                    summary, loss_value, _ = sess.run([merged, loss, train_op])
-                    sum_writer.add_summary(summary, i)
-                    saver.save(sess, join(FLAGS.checkpoint_dir, "my_model"))
-                    print("saved.")
-                    if (i % FLAGS.log_frequency) == 0:
-                        act_time = time.time()
-                        exec_time = act_time - last_time
-                        samples_per_sec = FLAGS.batch_size * FLAGS.log_frequency / exec_time
-                        print("Step %i, loss: %f, execution time: %.4f, samples/second: %.4f" 
-                                % (i, loss_value, exec_time, samples_per_sec) )
-                        last_time = time.time()
-
-            coord.request_stop()
-            coord.join(threads)
+            return batch_normed
 
 
-        class _LoggerHook(tf.train.SessionRunHook):
-            """Logs loss and runtime."""
-
-            def begin(self):
-              self._step = -1
-              self._start_time = time.time()
-
-            def before_run(self, run_context):
-                self._step += 1
-                return tf.train.SessionRunArgs(loss)  # Asks for loss value.
-  
-            def after_run(self, run_context, run_values):
-                if self._step % FLAGS.log_frequency == 0:
-                    current_time = time.time()
-                    duration = current_time - self._start_time
-                    self._start_time = current_time
-      
-                    loss_value = run_values.results
-                    examples_per_sec = FLAGS.log_frequency * FLAGS.batch_size / duration
-                    sec_per_batch = float(duration / FLAGS.log_frequency)
-      
-                    format_str = ('%s: step %d, loss = %.2f (%.1f examples/sec; %.3f '
-                                  'sec/batch)')
-                    print (format_str % (datetime.now(), self._step, loss_value,
-                                               examples_per_sec, sec_per_batch))
+def leakyRelu(pre_activation, leaky_alpha: float = 0.1):
+    return tf.maximum(pre_activation, leaky_alpha * pre_activation, name="leaky_relu")
 
 
-        """
-        with tf.train.MonitoredTrainingSession(
-            checkpoint_dir=FLAGS.checkpoint_dir,
-            hooks=[tf.train.StopAtStepHook(last_step=FLAGS.max_steps),
-                   tf.train.NanTensorHook(loss),
-                   _LoggerHook()],
-            config=tf.ConfigProto(
-                log_device_placement=FLAGS.log_device_placement)) as mon_sess:
-            #if FLAGS.debug:
-            #    mon_sess = tf_debug.LocalCLIDebugWrapperSession(tf.Session().as_default())
-            print("Training started...")
-            while not mon_sess.should_stop():
-                queued_size = mon_sess.run(examples_in_queue)
-                print("Queued examples: %i" %queued_size)
-                print("Inner cycle")
-                mon_sess.run(train_op)
-        """
+def variable_with_weight_decay(name, shape, wd, initializer):
+    """Helper to create an initialized Variable with weight decay.
+
+    Note that the Variable is initialized with a truncated normal distribution.
+    A weight decay is added only if one is specified.
+
+    Args:
+      name: name of the variable
+      shape: list of ints
+      wd: add L2Loss weight decay multiplied by this float. If None, weight
+          decay is not added for this Variable.
+
+    Returns:
+      Variable Tensor
+    """
+    var = variable_on_cpu(
+        name,
+        shape,
+        initializer)
+    if wd is not None:
+        weight_decay = tf.multiply(tf.nn.l2_loss(var), wd, name='weight_loss')
+        tf.add_to_collection('losses', weight_decay)
+    return var
 
 
-def eval_network(train_on_tiles = False, use_dataset = False):
-    tf.reset_default_graph()
-    with tf.Graph().as_default():
-        global_step = tf.contrib.framework.get_or_create_global_step()
+def variable_on_cpu(name, shape, initializer):
+    """Helper to create a Variable stored on CPU memory.
 
-        if use_dataset:
-            pic_batch, label_batch = readFromDataSet(dataset_file, train_on_tiles)
-        else:
-            pic_batch, label_batch, enqueue_op, enq_image, enq_label, examples_in_queue = readOnTheFly()
+    Args:
+      name: name of the variable
+      shape: list of ints
+      initializer: initializer for Variable
 
-        logits, tiles = inference(pic_batch)
+    Returns:
+      Variable Tensor
+    """
+    # with tf.device('/cpu:0'):
+    with tf.device('/gpu:0'):
+        # dtype = tf.float16 if FLAGS.use_fp16 else tf.float32
+        dtype = tf.float32
+        var = tf.get_variable(name, shape, initializer=initializer, dtype=dtype)
+    return var
 
-        if train_on_tiles:
-            # if dataset is created with train_on_tiles is True, label_batch will actually
-            # contain the tile matrix...
-            # TODO fix this
-            if FLAGS.detailed_log:
-                tf.summary.image(
-                        "tile label",
-                        tf.reshape(label_batch, [FLAGS.batch_size, TILE_NUMBER_X, TILE_NUMBER_Y, 1]))
-                alpha_cut = np.full([FLAGS.batch_size, TILE_NUMBER_X, TILE_NUMBER_Y], ALPHA_CUT, dtype=np.float32)
-                tf.summary.image(
-                        "tile output",
-                        tf.cast(
-                            tf.reshape(tf.greater_equal(tiles, tf.convert_to_tensor(alpha_cut)),
-                                [FLAGS.batch_size, TILE_NUMBER_X, TILE_NUMBER_Y, 1]),
-                            dtype=tf.float32))
 
-            loss = _loss(tiles,label_batch)
-            train_op = train(loss, global_step)
+def normal_variable_with_weight_decay(name, shape, stddev, wd):
+    """Helper to create an initialized Variable with weight decay.
 
-        else:
-                
+    Note that the Variable is initialized with a truncated normal distribution.
+    A weight decay is added only if one is specified.
 
-            loss = _loss(logits,label_batch)
-            train_op = train(loss, global_step)
+    Args:
+      name: name of the variable
+      shape: list of ints
+      stddev: standard deviation of the variable at initalization
+      wd: add L2Loss weight decay multiplied by this float. If None, weight
+          decay is not added for this Variable.
 
-        coord = tf.train.Coordinator()
+    Returns:
+      Variable Tensor
+    """
+    initializer = tf.truncated_normal_initializer(stddev=stddev, dtype=tf.float32)
 
-        if not use_dataset:
-            samples_iter = get_samples()
-
-        with tf.Session().as_default() as sess:
-            threads = []
-            for i in range(NUM_PREPROCESS_THREADS):
-                
-                t = threading.Thread(target=load_preproc_enqueue_thread, args=(
-                    sess, coord, enqueue_op, enq_image, enq_label, samples_iter
-                ))
-
-                t.setDaemon(True)
-                t.start()
-                threads.append(t)
-                coord.register_thread(t)
-                time.sleep(0.5)
-
-            num_examples_in_queue = sess.run(examples_in_queue)
-            while num_examples_in_queue < MIN_QUEUE_EXAMPLES:
-                num_examples_in_queue = sess.run(examples_in_queue)
-                for t in threads:
-                    if not t.isAlive():
-                        coord.request_stop()
-                        raise ValueError("One or more enqueuing threads crashed...")
-                time.sleep(0.1)
-
-            print("# of examples in queue: %i" % num_examples_in_queue)
-            sess.run(tf.global_variables_initializer())
-
-            last_time = time.time()
-            saver = tf.train.Saver()
-            #saver = tf.train.import_meta_graph(join(FLAGS.checkpoint_dir, "my_model.meta"))
-            if isfile(join(FLAGS.checkpoint_dir, "checkpoint")):
-                saver.restore(sess,tf.train.latest_checkpoint(FLAGS.checkpoint_dir))
-
-            print("Running model...")
-            loss_value, res_images, res_labels, orig_labels, _ = (
-                sess.run([loss, pic_batch, logits, label_batch, train_op]))
-            print("Done.")
-            act_time = time.time()
-            exec_time = act_time - last_time
-            samples_per_sec = FLAGS.batch_size * FLAGS.log_frequency / exec_time
-            print("Step %i, loss: %f, execution time: %.4f, samples/second: %.4f" 
-                    % (i, loss_value, exec_time, samples_per_sec) )
-            last_time = time.time()
-
-        coord.request_stop()
-
-        return res_images, res_labels, loss_value, orig_labels
+    return variable_with_weight_decay(name, shape, wd, initializer)

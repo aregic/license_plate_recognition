@@ -187,9 +187,24 @@ def draw_bounding_box(image : np.ndarray,
                       output_polygon : list = None,
                       draw_tiles : bool = False,
                       tile_num_x = 16,
-                      tile_num_y = 16):
-    _draw_bounding_box(image, label_polygon, output_polygon, draw_tiles, tile_num_x, tile_num_y)
+                      tile_num_y = 16,
+                      height_width : bool = True):
+    _draw_bounding_box(image, label_polygon, output_polygon, draw_tiles, tile_num_x, tile_num_y, height_width)
     plt.show()
+
+
+def _draw_bounding_box_on_pic(ax, label, height_width : bool = False):
+    if height_width:
+        ax.add_patch(patches.Rectangle(
+            (label[0][0], label[0][1]),
+            label[1][0], label[1][1],
+            fill=False, linewidth=1, color='tab:blue'))
+    else:
+        ax.add_patch(patches.Rectangle(
+            (label[0][0], label[0][1]),
+            label[1][0] - label[0][0],
+            label[1][1] - label[0][1],
+            fill=False, linewidth=1, color='tab:blue'))
 
 
 def _draw_bounding_box(image : np.ndarray, 
@@ -197,7 +212,8 @@ def _draw_bounding_box(image : np.ndarray,
                       output_polygon : list = None,
                       draw_tiles : bool = False,
                       tile_num_x = 16,
-                      tile_num_y = 16):
+                      tile_num_y = 16,
+                      height_width: bool = True):
     """
         `label_polygon` and `output_polygon` are both expected in the following form:
           [ [x1,y1], [x2,y2], [x3,y3], [x4,y4] ]
@@ -221,17 +237,21 @@ def _draw_bounding_box(image : np.ndarray,
 
     for one_label in label_polygon:
         # rectangle expects height and width and not 2nd coordinates as the 2nd vertice of the bounding box
-        ax.add_patch(patches.Rectangle( 
-            (one_label[0][0], one_label[0][1]),
-            one_label[1][0], one_label[1][1],
-            fill=False, linewidth=1, color='tab:green'))
+        _draw_bounding_box_on_pic(ax, one_label, height_width=height_width)
 
     if output_polygon is not None:
         for one_output_polygon in output_polygon:
-            ax.add_patch(patches.Rectangle( 
-                (one_output_polygon[0][0], one_output_polygon[0][1]),
-                one_output_polygon[1][0], one_output_polygon[1][1],
-                fill=False, linewidth=1, color='tab:blue'))
+            if height_width:
+                ax.add_patch(patches.Rectangle(
+                    (one_output_polygon[0][0], one_output_polygon[0][1]),
+                    one_output_polygon[1][0], one_output_polygon[1][1],
+                    fill=False, linewidth=1, color='tab:blue'))
+            else:
+                ax.add_patch(patches.Rectangle(
+                    (one_output_polygon[0][0], one_output_polygon[0][1]),
+                    one_output_polygon[0][0] - one_output_polygon[1][0],
+                    one_output_polygon[0][1] - one_output_polygon[1][1],
+                    fill=False, linewidth=1, color='tab:blue'))
 
     plt.show()
 

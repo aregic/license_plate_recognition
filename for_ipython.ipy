@@ -1,0 +1,18 @@
+import matplotlib.pyplot as plt
+import numpy as np
+import scipy.misc as sm
+
+%load_ext autoreload
+%autoreload 2
+
+from nn import *
+from inspect_images import *
+
+imloc = './samples/pic034.jpg'
+
+im = sm.imread(imloc, mode='L')
+label = get_bounding_box(imloc)
+
+s = SlidingWindowSampleCreator(200,200,450,450)
+it = s.create_sliding_window_samples(im, label)
+windows = [i for i in it]

@@ -1,5 +1,8 @@
 import tensorflow as tf
 from nn import *
+from gaborwavelet import orthonormalInit, getBasicKernels
+import time
+import threading
 
 
 class Network:
@@ -33,6 +36,7 @@ class Yolo:
         self.max_number_of_boxes_per_image = int(common_params.get('max number of boxes per image', 5))
 
         self.num_of_preprocess_threads = int(common_params.get('number of preprocessor threads', 8))
+        self.min_queue_examples = int(common_params["minimum examples in the input queue"])
 
         self.examples_per_epoch = int(common_params.get('examples per epoch', 10000))
         self.epoch_per_decay = int(common_params.get('epochs per decay', 100))
@@ -40,6 +44,7 @@ class Yolo:
         self.learning_decay = float(net_params['learning decay'])
         self.momentum = float(net_params.get('learning momentum'))
         self.use_gabor_wavelet = bool(net_params.get('use gabor wavelet', False))
+        self.data_dir = str(common_params["sample directory"])
 
         self.preprocessor = Preprocessor(
             self.image_size,
@@ -110,9 +115,9 @@ class Yolo:
             # Move everything into depth so we can perform a single matrix multiply.
             reshape = tf.reshape(norm6, [self.batch_size, -1])
             dim = reshape.get_shape()[1].value
-            weights = _normal_variable_with_weight_decay('weights', shape=[dim, 192],
+            weights = normal_variable_with_weight_decay('weights', shape=[dim, 192],
                                                          stddev=0.04, wd=0.004)
-            biases = _variable_on_cpu('biases', [192], tf.constant_initializer(0.1))
+            biases = variable_on_cpu('biases', [192], tf.constant_initializer(0.1))
             # local3 = tf.nn.relu(tf.matmul(reshape, weights) + biases, name=scope.name)
             pre_act3 = tf.matmul(reshape, weights) + biases
             local3 = leakyRelu(pre_act3)
@@ -133,9 +138,9 @@ class Yolo:
         """
 
         with tf.variable_scope('tile_output_layer') as scope:
-            tile_weights = _normal_variable_with_weight_decay('weights', [192, self.cell_size * self.cell_size * 6],
+            tile_weights = normal_variable_with_weight_decay('weights', [192, self.cell_size * self.cell_size * 6],
                                                               stddev=1 / 192.0, wd=0.0)
-            tile_biases = _variable_on_cpu('biases', [self.cell_size * self.cell_size * 6],
+            tile_biases = variable_on_cpu('biases', [self.cell_size * self.cell_size * 6],
                                            tf.constant_initializer(0.0))
             tile_softmax_linear = tf.add(tf.matmul(dropped_local3, tile_weights), tile_biases, name=scope.name)
             bnormed_softmax = tf.layers.batch_normalization(tile_softmax_linear, training=True)
@@ -202,7 +207,7 @@ class Yolo:
             global_step = tf.contrib.framework.get_or_create_global_step()
             # global_step_tensor = tf.Variable(1, trainable=False, name='global_step')
 
-            pic_batch, label_batch, enqueue_op, enq_image, enq_label, examples_in_queue = readOnTheFly()
+            pic_batch, label_batch, enqueue_op, enq_image, enq_label, examples_in_queue = self.readOnTheFly()
 
             # logits, tiles = self.inference(pic_batch)
             logits = self.inference(pic_batch)
@@ -245,7 +250,7 @@ class Yolo:
                     time.sleep(0.5)
 
                 num_examples_in_queue = sess.run(examples_in_queue)
-                while num_examples_in_queue < MIN_QUEUE_EXAMPLES:
+                while num_examples_in_queue < self.min_queue_examples:
                     num_examples_in_queue = sess.run(examples_in_queue)
                     for t in threads:
                         if not t.isAlive():
@@ -284,22 +289,79 @@ class Yolo:
 
                 return loss_result, logit_result, label_result, pic_result, collected_grad_result
 
-    def train_on_lots_of_pics(self, dataset_file: dir, train_on_tiles=False, use_dataset=False):
+
+    def readOnTheFly(self, size_x : int, size_y : int, label_max_num : int) -> EnqueueThread:
+        enq_image = tf.placeholder(tf.float32, shape=[size_x, size_y, 1])
+        enq_label = tf.placeholder(tf.float32, shape=[label_max_num, 5])
+
+        q = tf.RandomShuffleQueue(
+            capacity=self.min_queue_examples + self.num_of_preprocess_threads * self.batch_size,
+            min_after_dequeue=self.min_queue_examples + self.batch_size,
+            dtypes=[tf.float32, tf.float32],
+            shapes=[[size_x, size_y, 1], [label_max_num, 5]]
+        )
+
+        enqueue_op = q.enqueue([enq_image, enq_label])
+        examples_in_queue = q.size()
+        queue_close_op = q.close(cancel_pending_enqueues=True)
+        image_batch_queue, label_batch_queue = q.dequeue_many(self.batch_size)
+
+        return EnqueueThread(image_batch_queue, label_batch_queue, enqueue_op, enq_image,
+                                 enq_label, examples_in_queue, queue_close_op)
+
+
+    def startThreads(self, enqueue_thread_info : EnqueueThread, sess, coord, samples_iter) -> list:
+        threads = []
+        for i in range(self.num_of_preprocess_threads):
+            # print("Creating thread %i" % i)
+            t = threading.Thread(target=load_preproc_enqueue_thread, args=(
+                sess,
+                coord,
+                enqueue_thread_info.enqueue_op,
+                enqueue_thread_info.enq_image,
+                enqueue_thread_info.enq_label,
+                samples_iter
+            ))
+
+            t.setDaemon(True)
+            t.start()
+            threads.append(t)
+            coord.register_thread(t)
+            time.sleep(0.5)
+
+        num_examples_in_queue = sess.run(enqueue_thread_info.examples_in_queue)
+        while num_examples_in_queue < MIN_QUEUE_EXAMPLES:
+            num_examples_in_queue = sess.run(enqueue_thread_info.examples_in_queue)
+            for t in threads:
+                if not t.isAlive():
+                    coord.request_stop()
+                    raise ValueError("One or more enqueuing threads crashed...")
+            time.sleep(0.1)
+
+        print("# of examples in queue: %i" % num_examples_in_queue)
+
+        return threads
+
+
+    def train_on_lots_of_pics(self, sliding_window : bool = False):
         """
-            Leave train on tiles on False for now.
+        :param sliding_window If true, training will be done on small part of the picture at a time
+            using sliding window
         """
         losses = list(np.zeros(int(self.log_frequency / self.batch_size)))
         tf.reset_default_graph()
         with tf.Graph().as_default():
             global_step = tf.contrib.framework.get_or_create_global_step()
 
-            if use_dataset:
-                pic_batch, label_batch = readFromDataSet(dataset_file, train_on_tiles)
+            if sliding_window:
+                enqueue_thread = self.readOnTheFly(self.image_size, self.image_size,
+                                                   self.max_number_of_boxes_per_image)
             else:
-                pic_batch, label_batch, enqueue_op, enq_image, enq_label, examples_in_queue = readOnTheFly()
+                enqueue_thread = self.readOnTheFly(self.image_size, self.image_size,
+                                                   self.max_number_of_boxes_per_image)
 
             # logits, tiles = self.inference(pic_batch)
-            logits = self.inference(pic_batch)
+            logits = self.inference(enqueue_thread.pic_batch)
 
             """
             label_batch_filtered = tf.boolean_mask(
@@ -308,10 +370,10 @@ class Yolo:
             label_batch_filtered = tf.Print(label_batch_filtered, [label_batch_filtered], "\n\nLABEL BATCH FILTERED: ", summarize=250)
             label_batch_filtered = tf.Print(label_batch_filtered, [label_batch], "\n\nLABEL BATCH: ", summarize=250)
             """
-            number_of_boxes = tf.cast(tf.count_nonzero(label_batch[:, :, 4], 1), dtype=tf.int32)
+            number_of_boxes = tf.cast(tf.count_nonzero(enqueue_thread.label_batch[:, :, 4], 1), dtype=tf.int32)
             # number_of_boxes = tf.Print(number_of_boxes, [number_of_boxes], "\n\nNumber of boxes: ",
             #        summarize=10)
-            self.network.loss, _ = self.loss(logits, label_batch, number_of_boxes)
+            self.network.loss, _ = self.loss(logits, enqueue_thread.label_batch, number_of_boxes)
 
             extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
             with tf.control_dependencies(extra_update_ops):
@@ -321,37 +383,16 @@ class Yolo:
 
             coord = tf.train.Coordinator()
 
-            if not use_dataset:
-                samples_iter = get_samples()
+            sampleLoader = SampleLoader(self.image_size, self.image_size, self.max_number_of_boxes_per_image,
+                                        self.data_dir)
+
+            samples_iter = sampleLoader.get_samples()
 
             with tf.Session().as_default() as sess:
                 sess.run(tf.local_variables_initializer())
                 sess.run(tf.global_variables_initializer())
 
-                if not use_dataset:
-                    threads = []
-                    for i in range(self.num_of_preprocess_threads):
-                        # print("Creating thread %i" % i)
-                        t = threading.Thread(target=load_preproc_enqueue_thread, args=(
-                            sess, coord, enqueue_op, enq_image, enq_label, samples_iter
-                        ))
-
-                        t.setDaemon(True)
-                        t.start()
-                        threads.append(t)
-                        coord.register_thread(t)
-                        time.sleep(0.5)
-
-                    num_examples_in_queue = sess.run(examples_in_queue)
-                    while num_examples_in_queue < MIN_QUEUE_EXAMPLES:
-                        num_examples_in_queue = sess.run(examples_in_queue)
-                        for t in threads:
-                            if not t.isAlive():
-                                coord.request_stop()
-                                raise ValueError("One or more enqueuing threads crashed...")
-                        time.sleep(0.1)
-
-                    print("# of examples in queue: %i" % num_examples_in_queue)
+                threads = self.startThreads(enqueue_thread, sess, coord, samples_iter)
 
                 # Create a coordinator and run all QueueRunner objects
                 coord = tf.train.Coordinator()
@@ -359,7 +400,7 @@ class Yolo:
 
                 last_time = time.time()
                 saver = tf.train.Saver()
-                # saver = tf.train.import_meta_graph(join(self..checkpoint_dir, "my_model.meta"))
+                # saver = tf.train.import_meta_graph(join(self.checkpoint_dir, "my_model.meta"))
                 checkpoint_file = join(self.checkpoint_dir, "my_model")
                 if isfile(join(self.checkpoint_dir, "checkpoint")):
                     # saver.restore(sess,tf.train.latest_checkpoint(self.checkpoint_dir))
@@ -607,116 +648,3 @@ class Yolo:
                     loss[0] + loss[1] + loss[2] + loss[3]) / self.batch_size)
 
         return tf.add_n(tf.get_collection('losses'), name='total_loss'), nilboy
-
-
-def _normal_variable_with_weight_decay(name, shape, stddev, wd):
-    """Helper to create an initialized Variable with weight decay.
-
-    Note that the Variable is initialized with a truncated normal distribution.
-    A weight decay is added only if one is specified.
-
-    Args:
-      name: name of the variable
-      shape: list of ints
-      stddev: standard deviation of the variable at initalization
-      wd: add L2Loss weight decay multiplied by this float. If None, weight
-          decay is not added for this Variable.
-
-    Returns:
-      Variable Tensor
-    """
-    initializer = tf.truncated_normal_initializer(stddev=stddev, dtype=tf.float32)
-
-    return _variable_with_weight_decay(name, shape, wd, initializer)
-
-
-def _variable_with_weight_decay(name, shape, wd, initializer):
-    """Helper to create an initialized Variable with weight decay.
-
-    Note that the Variable is initialized with a truncated normal distribution.
-    A weight decay is added only if one is specified.
-
-    Args:
-      name: name of the variable
-      shape: list of ints
-      wd: add L2Loss weight decay multiplied by this float. If None, weight
-          decay is not added for this Variable.
-
-    Returns:
-      Variable Tensor
-    """
-    var = _variable_on_cpu(
-        name,
-        shape,
-        initializer)
-    if wd is not None:
-        weight_decay = tf.multiply(tf.nn.l2_loss(var), wd, name='weight_loss')
-        tf.add_to_collection('losses', weight_decay)
-    return var
-
-
-def _variable_on_cpu(name, shape, initializer):
-    """Helper to create a Variable stored on CPU memory.
-
-    Args:
-      name: name of the variable
-      shape: list of ints
-      initializer: initializer for Variable
-
-    Returns:
-      Variable Tensor
-    """
-    # with tf.device('/cpu:0'):
-    with tf.device('/gpu:0'):
-        # dtype = tf.float16 if FLAGS.use_fp16 else tf.float32
-        dtype = tf.float32
-        var = tf.get_variable(name, shape, initializer=initializer, dtype=dtype)
-    return var
-
-
-def create_layer(image, shape: np.ndarray, initialial_value: float, stddev: float,
-                 scope_name: str, dropout_rate: float = 0.0, leaky_alpha: float = 0.1,
-                 const_init=None, batch_norm=True, show_tensor=False):
-    if const_init is None:
-        initializer = tf.constant(orthonormalInit(shape))
-        # initializer = tf.truncated_normal_initializer(stddev=stddev, dtype=tf.float32) # stddev originally: 5e-2
-    else:
-        initializer = tf.constant(const_init)
-
-    with tf.variable_scope(scope_name) as scope:
-        kernel = _variable_with_weight_decay('weights',
-                                             shape=None,
-                                             wd=0.0,
-                                             initializer=initializer)
-
-        conv = tf.nn.conv2d(image, kernel, [1, 1, 1, 1], padding='SAME')
-        biases = _variable_on_cpu('biases', shape[3], tf.constant_initializer(initialial_value))
-        pre_activation = tf.nn.bias_add(conv, biases)
-        # conv1 = tf.nn.relu(pre_activation, name=scope.name)
-        # conv1 = tf.maximum(pre_activation, leaky_alpha * pre_activation, name="leaky_relu")
-
-        conv1 = leakyRelu(pre_activation, leaky_alpha)
-
-        if show_tensor:
-            kernels = tf.transpose(kernel[:, :, 0, :], [2, 0, 1])
-            tf.summary.image(
-                "kernel",
-                tf.reshape(kernels, [32, shape[0], shape[1], 1]),
-                max_outputs=32)
-
-        if batch_norm:
-            batch_normed = tf.layers.batch_normalization(conv1, training=True, trainable=True)
-        else:
-            batch_normed = conv1
-
-        print("Layer %s initalized." % scope_name)
-
-        if dropout_rate != 0.0:
-            dropped_conv1 = tf.nn.dropout(batch_normed, dropout_rate)
-            return dropped_conv1
-        else:
-            return batch_normed
-
-
-def leakyRelu(pre_activation, leaky_alpha: float = 0.1):
-    return tf.maximum(pre_activation, leaky_alpha * pre_activation, name="leaky_relu")
