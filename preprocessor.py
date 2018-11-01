@@ -228,7 +228,8 @@ class SlidingWindowSampleCreator:
         ZEROES = 1
         DONT_SLIDE_OUTSIDE = 2   # WARNING! Not supported yet!
 
-    def __init__(self, slide_x : int, slide_y : int, window_width : int, window_height : int):
+    def __init__(self, slide_x : int, slide_y : int, window_width : int, window_height : int,
+                 normalize_label : bool = False):
         """This class creates small cropped images out of a big one along a sliding window.
         If part of the window would go outside the picture, it will be padded by zeros.
 
@@ -236,11 +237,14 @@ class SlidingWindowSampleCreator:
         :param slide_y: window will slide along the y axis by this ammount
         :param window_width: width of the sliding window
         :param window_height: height of the sliding window
+        :param normalize_label: if True, labels will be between 0.0 and 1.0 (unless they are already -1
+            which denotes "no object on this picture"
         """
         self.slide_x = slide_x
         self.slide_y = slide_y
         self.window_width = window_width
         self.window_height = window_height
+        self.normalize_label = normalize_label
 
 
     def getOutputDim(self):
@@ -289,6 +293,13 @@ class SlidingWindowSampleCreator:
                     y = j * self.slide_y
 
                     label = filter_and_transform_labels(labels, x, y, self.window_width, self.window_height)
+
+                    if self.normalize_label and label[0] != -1:
+                        label = np.array(label).astype(np.float)
+                        label[0] /= float(self.window_width)
+                        label[1] /= float(self.window_height)
+                        label[2] /= float(self.window_width)
+                        label[3] /= float(self.window_height)
 
                     yield padded_image[y:y + self.window_height, x:x + self.window_width], label
 
@@ -361,7 +372,7 @@ def plotImages(images : np.ndarray, square_width = 1.0, square_height = 1.0, nor
                 return
 
 
-def plotImagesWithLabels(images_with_labels : np.ndarray, square_width = 1.0, square_height = 1.0, normalize = False):
+def plotImagesWithLabels(images_with_labels : np.ndarray, normalized = False):
     #numOfKernels = np.shape(images)[0]
     images = []
     labels = []
@@ -387,8 +398,15 @@ def plotImagesWithLabels(images_with_labels : np.ndarray, square_width = 1.0, sq
             index = i*numOfRows + j
 
             if index < numOfImages:
-                label = labels[index]
+                label = np.array(labels[index]).copy()
                 axs[i, j].imshow(images[index], cmap='gray')
+
+                if normalized:
+                    label[0] = int(label[0] * images[index].shape[1])
+                    label[1] = int(label[1] * images[index].shape[0])
+                    label[2] = int(label[2] * images[index].shape[1])
+                    label[3] = int(label[3] * images[index].shape[0])
+
                 axs[i, j].add_patch(patches.Rectangle(
                     (label[0], label[1]),
                     label[2] - label[0], label[3] - label[1],

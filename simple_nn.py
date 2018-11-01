@@ -99,8 +99,8 @@ class SimpleNet:
             tile_biases = variable_on_cpu('biases', [self.config.network.output_dim * self.config.network.max_label_num],
                                            tf.constant_initializer(0.0))
             tile_softmax_linear = tf.add(tf.matmul(dropped_local3, tile_weights), tile_biases, name=scope.name)
-            bnormed_softmax = tf.layers.batch_normalization(tile_softmax_linear, training=True)
-            tile_dropped_softmax = tf.nn.dropout(bnormed_softmax, 0.9)
+            # bnormed_softmax = tf.layers.batch_normalization(tile_softmax_linear, training=True)
+            tile_dropped_softmax = tf.nn.dropout(tile_softmax_linear, 0.9)
 
             tile_result = tf.reshape(
                 tile_dropped_softmax,
@@ -202,9 +202,9 @@ class SimpleNet:
                                         staircase=True)
         tf.summary.scalar('learning_rate', lr)
 
-        # opt = tf.train.GradientDescentOptimizer(lr)
-        # opt = tf.train.AdamOptimizer(lr)
-        opt = tf.train.MomentumOptimizer(lr, self.config.network.learning_momentum)
+        opt = tf.train.GradientDescentOptimizer(lr)
+        #opt = tf.train.AdamOptimizer(lr)
+        #opt = tf.train.MomentumOptimizer(lr, self.config.network.learning_momentum)
         grads = opt.compute_gradients(loss)
         apply_grad_op = opt.apply_gradients(grads, global_step=global_step)
 

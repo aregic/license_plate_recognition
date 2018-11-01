@@ -1,10 +1,5 @@
-import numpy as np
 import scipy.ndimage
 import pandas as pd
-import matplotlib.pyplot as plt
-from inspect_images import *
-from nn import *
-from tensorflow.python import debug as tf_debug
 import configparser
 from yolo import Yolo
 import json
@@ -75,7 +70,7 @@ def run_simple_nn():
 
     image_iter = imageLabelIterator(env_config.sample_dir)
     s = SlidingWindowSampleCreator(network_config.slide_x, network_config.slide_y, network_config.window_width,
-                                   network_config.window_height)
+                                   network_config.window_height, normalize_label=True)
 
     sliding_window_iter = s.create_sliding_window_from_iter(image_iter)
 

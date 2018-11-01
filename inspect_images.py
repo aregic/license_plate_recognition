@@ -399,7 +399,6 @@ def draw_grid_on_pic(ax,
         ax.add_patch(patches.Rectangle( (0, y), size_x, grid_width, color=color))
 
 
-
 def save_bounding_box(save_file : dir, image : np.ndarray, label_polygon : list, output_polygon : list = None):
     """
         `label_polygon` and `output_polygon` are both expected in the following form:
