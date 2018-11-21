@@ -2,7 +2,7 @@ import scipy.ndimage
 import pandas as pd
 import configparser
 from yolo import Yolo
-import ruamel_yaml
+import ruamel.yaml
 from simple_nn import *
 from data_feeder import *
 
@@ -62,7 +62,7 @@ def run_yolo():
 
 
 def run_simple_nn():
-    config = ruamel_yaml.load(open("./simple_net_config.yaml"))
+    config = ruamel.yaml.load(open("./simple_net_config.yaml"))
     network_config = NetworkConfig(**config["SimpleNetConfig"])
     env_config = EnvConfig(**config["EnvConfig"])
 

@@ -12,12 +12,12 @@ html_out = template.render(template_vars)
 
 pdfkit.from_string(html_out, "out.pdf")
 """
-import ruamel_yaml
+import ruamel.yaml
 from inspect_images import draw_float_bounding_box
 from data_feeder import *
 from simple_nn import SimpleNet
 
-config = ruamel_yaml.load(open("./simple_net_config.yaml"))
+config = ruamel.yaml.load(open("./simple_net_config.yaml"))
 network_config = NetworkConfig(**config["SimpleNetConfig"])
 env_config = EnvConfig(**config["EnvConfig"])
 

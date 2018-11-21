@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.misc as sm
-import ruamel_yaml
+import ruamel.yaml
 from inspect_images import draw_float_bounding_box
 
 %load_ext autoreload
@@ -11,7 +11,7 @@ from data_feeder import *
 
 from simple_nn import SimpleNet
 
-config = ruamel_yaml.load(open("./simple_net_config.yaml"))
+config = ruamel.yaml.load(open("./simple_net_config.yaml"))
 network_config = NetworkConfig(**config["SimpleNetConfig"])
 env_config = EnvConfig(**config["EnvConfig"])
 
