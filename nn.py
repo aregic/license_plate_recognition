@@ -298,9 +298,9 @@ def readFromDataSet(dataset_file : dir, train_on_tiles : bool):
     return pic_batch, label_batch
 
 
-def create_layer(image, shape: np.ndarray, initialial_value: float, stddev: float,
+def create_layer(image : tf.Tensor, shape: List[int], initialial_value: float,
                  scope_name: str, dropout_rate: float = 0.0, leaky_alpha: float = 0.1,
-                 const_init=None, batch_norm=True, show_tensor=False):
+                 const_init=None, batch_norm=False, show_tensor=False):
     if const_init is None:
         initializer = tf.constant(orthonormalInit(shape))
         # initializer = tf.truncated_normal_initializer(stddev=stddev, dtype=tf.float32) # stddev originally: 5e-2
@@ -310,7 +310,7 @@ def create_layer(image, shape: np.ndarray, initialial_value: float, stddev: floa
     with tf.variable_scope(scope_name) as scope:
         kernel = variable_with_weight_decay('weights',
                                             shape=None,
-                                            wd=0.0,
+                                            wd=None,
                                             initializer=initializer)
 
         conv = tf.nn.conv2d(image, kernel, [1, 1, 1, 1], padding='SAME')

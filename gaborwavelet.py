@@ -68,7 +68,6 @@ def orthonormalInit(kernel_shape : np.ndarray):
     """
     random_matrix = np.random.rand(kernel_shape[3], kernel_shape[0] * kernel_shape[1] * kernel_shape[2])
 
-
     u,_,vt = np.linalg.svd(random_matrix, full_matrices=False)
     print("svd finished, vt shape: %s, u shape: %s" % (str(np.shape(vt)), str(np.shape(u))))
     if np.shape(random_matrix)[0] > np.shape(random_matrix)[1]:
@@ -76,11 +75,11 @@ def orthonormalInit(kernel_shape : np.ndarray):
     else:
         w = np.reshape(vt, [kernel_shape[0], kernel_shape[1], kernel_shape[2], kernel_shape[3]])
 
-
     # the 0.9 multiplier is there because of using leaky relu, so variance for x < 0
     # is not 0, but 0.1 * variance(x>0)
-    stdev = np.sqrt((0.9*2)/kernel_shape[2])
-    w *= stdev
+    stdev = np.sqrt(2/(kernel_shape[2] + kernel_shape[3]))
+    w *= stdev/np.std(w)
+    print("Standard dev of initial weights: %f" % np.std(w))
 
     return w.astype(np.float32)
 

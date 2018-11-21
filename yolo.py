@@ -3,6 +3,7 @@ from nn import *
 from gaborwavelet import orthonormalInit, getBasicKernels
 import time
 import threading
+from data_feeder import EnqueueThread
 
 
 class Network:

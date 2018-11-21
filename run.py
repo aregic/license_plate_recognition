@@ -2,7 +2,7 @@ import scipy.ndimage
 import pandas as pd
 import configparser
 from yolo import Yolo
-import json
+import ruamel_yaml
 from simple_nn import *
 from data_feeder import *
 
@@ -62,7 +62,7 @@ def run_yolo():
 
 
 def run_simple_nn():
-    config = json.load(open("./simple_net_config.json"))
+    config = ruamel_yaml.load(open("./simple_net_config.yaml"))
     network_config = NetworkConfig(**config["SimpleNetConfig"])
     env_config = EnvConfig(**config["EnvConfig"])
 
@@ -70,7 +70,9 @@ def run_simple_nn():
 
     image_iter = imageLabelIterator(env_config.sample_dir)
     s = SlidingWindowSampleCreator(network_config.slide_x, network_config.slide_y, network_config.window_width,
-                                   network_config.window_height, normalize_label=True)
+                                   network_config.window_height, normalize_label=True,
+                                   yes_label_weight=network_config.yes_label_weight,
+                                   no_label_weight=network_config.no_label_weight)
 
     sliding_window_iter = s.create_sliding_window_from_iter(image_iter)
 

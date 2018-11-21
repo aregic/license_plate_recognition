@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.misc as sm
+from data_feeder import *
 
 %load_ext autoreload
 %autoreload 2
@@ -13,6 +14,7 @@ imloc = './samples/pic056.jpg'
 im = sm.imread(imloc, mode='L')
 label = get_bounding_box(imloc)
 
-s = SlidingWindowSampleCreator(150,150,300,300, normalize_label = True)
+s = SlidingWindowSampleCreator(150,150,300,300, normalize_label = False,
+    yes_label_weight=1.0, no_label_weight=0.2)
 it = s.create_sliding_window_samples(im, label)
 windows = [i for i in it]

@@ -9,6 +9,7 @@ import matplotlib.patches as patches
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from tiling import TileCounter
 from functools import reduce
+from label import *
 
 
 def filter_result(result, alpha):
@@ -109,35 +110,48 @@ def get_image_stats(location : str):
 
 
 def order_labels(labels : list) -> list:
-    print("List: %s" % labels)
     if len(labels) > 1:
         return sorted(labels)
     else:
         return labels
 
 
-def convert_to_bounding_boxes(labels : list) -> list:
-    if labels is None:
-        return None
-    res = []
-    for label in labels:
-        x1 = min(label[0][0], label[1][0], label[2][0], label[3][0])
-        x2 = max(label[0][0], label[1][0], label[2][0], label[3][0])
-        y1 = min(label[0][1], label[1][1], label[2][1], label[3][1])
-        y2 = max(label[0][1], label[1][1], label[2][1], label[3][1])
-        res.append([x1, y1, x2, y2])
-    return res
-
-
 def get_bounding_box(sample_image : dir) -> list:
     """
         This function assumes that the labels describe polygon, not bounding boxes
     """
-    return convert_to_bounding_boxes(get_bounding_polygon(sample_image))
+    return LicensePlateList(read_classic_label(sample_image)).getBoundingBoxCoordinates()
 
 
 def get_label_file_dir(image_dir : dir):
     return ".".join(image_dir.split(".")[:-1]) + ".txt"
+
+
+def read_classic_label(sample_image : dir) -> List[np.ndarray]:
+    """Reads the license plate coordinates from the file.
+
+    Classic labels are expected in the following form:
+    x11, y11, ..., x14, y14
+    x21, y21, ..., x24, y24
+    ...
+    xN1, yN1, ..., xN4, yN4
+
+    i.e. every line contains 4 vertices of the bounding quadrangle
+
+    :param sample_image: location of the correspinding image
+    :return: List of license plate bounding polygons in the form [x1, y1, ... ,x4,y4]
+    """
+    textFileName = get_label_file_dir(sample_image)
+    f = open(textFileName, "r")
+    line = f.readline().strip().split(",")
+    res = []
+    while len(line) > 1:
+        res.append([int(i) for i in line])
+        line = f.readline().strip().split(",")
+
+    #print("Classic label output: %s" % res)
+    return res
+
 
 
 def get_bounding_polygon(sample_image : dir):
@@ -164,11 +178,11 @@ def get_bounding_polygon(sample_image : dir):
     #return order_labels(res)
     return res
 
-
+"""
 def draw_bounding_box_from_polygons(image : np.ndarray, label_polygon : list, output_polygon : list = None):
     draw_bounding_box(image, convert_to_bounding_boxes(label_polygon),
         convert_to_bounding_boxes(output_polygon))
-
+"""
 
 def save_bounding_box(image : np.ndarray, 
                       label_polygon : list,
@@ -323,6 +337,7 @@ def draw_float_bounding_box(image : np.ndarray,
             l[0] *= size_x
             l[1] *= size_y
         """
+        print("output: %s" % str(output))
         output[0][0] *= size_x
         output[1][0] *= size_x
         output[0][1] *= size_y
@@ -331,12 +346,16 @@ def draw_float_bounding_box(image : np.ndarray,
         if midrepr:
             output[0][0] -=  (output[1][0] / 2)
             output[0][1] -=  (output[1][1] / 2)
+        else:
+            output[1][0] -= output[0][0]
+            output[1][1] -= output[0][1]
 
         ax.add_patch(patches.Rectangle( 
             (output[0][0], output[0][1]),
             output[1][0], output[1][1],
             fill=True, linewidth=1, color='tab:green', alpha=0.5))
 
+    """ I don't quite remember why it was this way
     if output_polygon is not None:
         for pos, one_output in output_polygon.items():
             output = np.copy(np.asarray(one_output))
@@ -361,10 +380,31 @@ def draw_float_bounding_box(image : np.ndarray,
                 (output[0][0], output[0][1]),
                 output[1][1], output[1][0],
                 fill=True, linewidth=1, color='tab:blue', alpha=0.5))
+    """
+    if output_polygon is not None:
+        for one_l_output in output_polygon:
+            one_output = np.copy(np.asarray(one_l_output))
+            print("net output: %s" % str(one_output))
+            one_output[0][0] *= size_x
+            one_output[1][0] *= size_x
+            one_output[0][1] *= size_y
+            one_output[1][1] *= size_y
+
+            if midrepr:
+                one_output[0][0] -= (one_output[1][0] / 2)
+                one_output[0][1] -= (one_output[1][1] / 2)
+            else:
+                one_output[1][0] -= one_output[0][0]
+                one_output[1][1] -= one_output[0][1]
+
+            ax.add_patch(patches.Rectangle(
+                (one_output[0][0], one_output[0][1]),
+                one_output[1][0], one_output[1][1],
+                fill=True, linewidth=1, color='tab:red', alpha=0.5))
 
     ax.imshow(image, cmap='gray')
 
-    plt.show()
+    #plt.show()
 
     fig.canvas.draw()
 

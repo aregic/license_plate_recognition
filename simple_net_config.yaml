@@ -1,18 +1,22 @@
 {
   "SimpleNetConfig" : {
-    "use_gabor_wavelet" : false,
+    "use_gabor_wavelet" : true,
     "batch_size" : 20,
-    "epoch_per_decay" : 100,
-    "initial_learning_rate" : 1e-3,
-    "learning_decay" : 1.0,
-    "learning_momentum" : 1e-3,
+    "epoch_per_decay" : 1000,
+    "initial_learning_rate" : 1e-5,
+    "learning_decay" : 0.97,
+    "learning_momentum" : 3e-3,
     "model_name" : "simple_net",
     "slide_x" : 100,
     "slide_y" : 100,
-    "window_width" : 300,
-    "window_height" : 300,
-    "output_dim" : 4,
-    "max_label_num" : 1
+    "window_width" : 250,
+    "window_height" : 250,
+    "output_dim" : 5,
+    "max_label_num" : 1,
+    "no_label_weight" : 0.10,
+    "yes_label_weight" : 1,
+    "leaky_alpha" : 0.01,
+    "cnn_dropout_rate" : 0.3
   },
   "EnvConfig" : {
     "examples_per_epoch" : 1000,
@@ -21,7 +25,7 @@
     "max_number_of_steps" : 100000000,
     "log_frequency" : 100,
     "log_dir" : "./logs",
-    "save_frequency" : 10000,
+    "save_frequency" : 1000,
     "checkpoint_dir" : "./checkpoints",
     "sample_dir" : "./samples"
   }
