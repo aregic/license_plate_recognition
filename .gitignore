@@ -20,3 +20,5 @@ old_training_data/*
 
 trash/*
 
+# generated reports are kept here
+report/
